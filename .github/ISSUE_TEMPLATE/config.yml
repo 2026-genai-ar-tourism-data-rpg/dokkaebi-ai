@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📋 상위 Task 보기 (.github 레포)
+    url: https://github.com/2026-genai-ar-tourism-data-rpg/.github/issues
+    about: 큰 기능 단위(Task)는 .github 레포에 있습니다. 작업 이슈는 상위 Task에 연결하세요.
+  - name: 📖 협업 가이드
+    url: https://github.com/2026-genai-ar-tourism-data-rpg/.github/blob/main/CONTRIBUTING.md
+    about: 브랜치·커밋·PR 규칙

@@ -1,0 +1,30 @@
+name: "🐞 버그"
+description: 버그 리포트
+title: "[버그] "
+labels: ["bug"]
+body:
+  - type: input
+    id: parent
+    attributes:
+      label: 관련 Task/이슈 (선택)
+      placeholder: 예) #12
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 방법
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작 vs 실제 동작
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 환경
+      placeholder: 기기 / OS / 브랜치 / 커밋 해시
