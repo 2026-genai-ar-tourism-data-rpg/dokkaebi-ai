@@ -1,0 +1,7 @@
+# [v1] dokkaebi-ai 의존성 (base-pipeline/kys/v1, 2026-06-10)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+pydantic-settings>=2.2
+langgraph>=0.2
+httpx>=0.27
