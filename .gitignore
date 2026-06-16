@@ -1,0 +1,32 @@
+# [v1] dokkaebi-ai .gitignore (base-pipeline/kys/v1, 2026-06-10)
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- 가상환경 ---
+.venv/
+venv/
+env/
+
+# --- env / 시크릿 (예시는 추적) ---
+.env
+.env.*
+!.env.example
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- 툴 캐시 ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- OS / IDE ---
+.DS_Store
+.vscode/
+.idea/
