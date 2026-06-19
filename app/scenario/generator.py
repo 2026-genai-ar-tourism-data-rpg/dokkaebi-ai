@@ -13,6 +13,8 @@ from app.config import get_settings
 from app.core.exceptions import DokkaebiAIError
 from app.core.logger import get_logger
 from app.region.memory_cache import get_region_cache
+from app.scenario.density import density_label
+from app.scenario.node_content import assign_mission_type, generate_mission, to_quiz
 from app.scenario.request import ScenarioRequest
 from app.services.dialogue_service import run_dialogue
 from app.tourapi.client import TourAPIClient, haversine_m
@@ -37,7 +39,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
     end = req.end
     scn = await generate_basic_scenario(
         req.start.lng, req.start.lat, region=req.region, radius_m=radius,
-        with_dialogue=req.with_dialogue,
+        with_dialogue=req.with_dialogue, with_content=req.with_content,
         end_x=end.lng if end else None, end_y=end.lat if end else None,
     )
     # 입력 메타 부착(저장·검증용)
@@ -53,7 +55,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
 async def generate_basic_scenario(
     map_x: float, map_y: float, *, region: str = "종로",
     radius_m: int | None = None, count: int | None = None,
-    with_dialogue: bool = True,
+    with_dialogue: bool = True, with_content: bool = True,
     end_x: float | None = None, end_y: float | None = None,
 ) -> dict:
     """[거리순 v0] 가까운 N개 관광지로 '기억석 챕터' 생성 + 장소기반 NPC 대사.
@@ -91,11 +93,26 @@ async def generate_basic_scenario(
     else:
         dialogues = [_fixed(n, i, total) for i, n in enumerate(route)]
 
-    logger.info("거리순 시나리오: 후보 %d → 채택 %d (반경 %dm, 대사=%s)",
-                len(nodes), total, radius_m, "LLM" if with_dialogue else "고정")
+    # 4.5) 고정 콘텐츠(생성 시 1회): 비인기 라벨(mock) + 퀴즈·지령(LLM, grounding). 아키텍처 3-5
+    for n in route:
+        n["density_tier"] = density_label(n)  # mock — 실데이터는 빅데이터 task
+    # 노드마다 미션 타입을 다양화(P1-P6 카탈로그): 순환 배정 + 피날레=복원
+    if with_content:
+        missions = await asyncio.gather(
+            *[_content_for(n, i, total) for i, n in enumerate(route)]
+        )
+    else:
+        missions = [None] * total
+
+    logger.info("거리순 시나리오: 후보 %d → 채택 %d (반경 %dm, 대사=%s, 미션=%s)",
+                len(nodes), total, radius_m, "LLM" if with_dialogue else "고정",
+                "/".join(m["type"] for m in missions if m) if with_content else "OFF")
 
     # 5) 퀘스트 조립
-    node_sequence = [_build_quest(n, i, total, region, dialogues[i]) for i, n in enumerate(route)]
+    node_sequence = [
+        _build_quest(n, i, total, region, dialogues[i], mission=missions[i])
+        for i, n in enumerate(route)
+    ]
     return {
         "scenario_id": _make_scenario_id(region, [q["node_id"] for q in node_sequence]),
         "title": f"{region}의 기억석 — {total}조각 코스",
@@ -140,15 +157,41 @@ def _fixed(node: dict, index: int, total: int) -> str:
     return tmpl.format(name=node.get("name", "이곳"))
 
 
-def _build_quest(node: dict, index: int, total: int, region: str, dialogue: str) -> dict:
-    """노드 1개 → 퀘스트 1개. (도착→NPC대사→조각1→다음, 마지막=피날레)"""
+async def _content_for(node: dict, index: int, total: int) -> dict:
+    """노드 미션 생성(타입별 다양화). 실패해도 시나리오 안 막음(폴백 보장)."""
+    name, overview = node.get("name") or "이곳", node.get("overview") or ""
+    mtype = assign_mission_type(index, is_finale=(index == total - 1))
+    try:
+        return await generate_mission(name, overview, mtype)
+    except Exception as e:
+        logger.warning("노드 %s 미션 생성 실패: %s", node.get("node_id"), e)
+        return {"type": mtype, "order": f"{name} 주변을 살펴 기억석 조각을 찾아라.",
+                "hints": ["주변을 둘러보거라."]}
+
+
+def _build_quest(node: dict, index: int, total: int, region: str, dialogue: str,
+                 mission: dict | None = None) -> dict:
+    """노드 1개 → 퀘스트 1개. (도착→NPC대사→미션(타입별)→조각1→다음, 마지막=피날레)
+
+    mission: 타입별 콘텐츠(PHOTO/COLLECT/DIALOGUE/FIND/QUIZ). 모든 미션에 지령(order)+힌트.
+    앱 호환: 질문형 미션은 quiz로도 매핑(to_quiz), 지령/힌트는 objective로 매핑.
+    """
     is_finale = index == total - 1
+    objective = None
+    quiz = None
+    if mission:
+        objective = {"order": mission.get("order", ""), "hints": mission.get("hints", [])}
+        quiz = to_quiz(mission)
     return {
         "order": index,
         "node_id": node["node_id"],
         "name": node.get("name"),
         "map_x": node.get("map_x"), "map_y": node.get("map_y"),
         "dist_m": node.get("dist_m"),
+        "density_tier": node.get("density_tier"),
+        "mission": mission,      # 타입별 미션(생성 시 1회). 핵심: 노드마다 다른 종류
+        "quiz": quiz,            # 앱 호환: 질문형이면 채워짐, 아니면 None
+        "objective": objective,  # AR 지령 + 단계 힌트(모든 타입 공통)
         "trigger_radius_m": 100,                         # 개방공간 기본(노드 상세 붙으면 교체)
         "fragment_id": f"{region}_stone_{index + 1}of{total}",
         "npc_dialogue": dialogue,
