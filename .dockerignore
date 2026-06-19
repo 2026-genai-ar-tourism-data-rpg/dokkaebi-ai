@@ -1,0 +1,9 @@
+# [v1] (base-pipeline/kys/v1, 2026-06-10)
+.venv/
+__pycache__/
+*.pyc
+.env
+.git/
+notebooks/
+.pytest_cache/
+.mypy_cache/
