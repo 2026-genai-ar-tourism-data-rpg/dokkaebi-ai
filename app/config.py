@@ -56,6 +56,32 @@ class Settings(BaseSettings):
     search_top_k: int = 5               # 코사인 top-k 후보 수
     search_min_score: float = 0.3       # 최소 유사도(이하 = 무관). 저신뢰 재검색 임계는 박준형 튜닝
 
+    # --- TourAPI (국문관광정보 — 노드 데이터 원천) ---
+    #  service_key 없으면 mock 종로 노드로 구동(거리순 로직 검증)
+    #  ⚠️ 오퍼레이션 버전(KorService1/2)은 키 발급 후 Swagger로 확정
+    tourapi_base_url: str = "http://apis.data.go.kr/B551011/KorService2"  # 노드 데이터(좌표·설명)
+    tourapi_data_base_url: str = "http://apis.data.go.kr/B551011"          # 빅데이터 계열 루트(연관·집중률·중심·방문자수)
+    tourapi_service_key: str = ""
+    tourapi_mobile_os: str = "ETC"
+    tourapi_mobile_app: str = "dokkaebi"
+    tourapi_timeout: float = 10.0
+
+    # --- 분기 대화 (찐 RPG, 기획 8-D) ---
+    max_dialogue_turns: int = 3          # 노드당 대화 깊이 상한(초과 시 조각 획득으로 수렴)
+
+    # --- 시나리오 생성 (거리순 v0) ---
+    scenario_content_type_id: int = 12   # 12=관광지 (식당39 등은 나중)
+    scenario_node_count: int = 5         # 기억석 조각 수 = 방문 장소 수
+    scenario_default_radius_m: int = 2000
+    scenario_radius_walk_m: int = 2000   # 이동수단=도보 기본 반경
+    scenario_radius_car_m: int = 8000    # 이동수단=차 기본 반경
+
+    # --- 캐시 (대사·노드 상세) ---
+    #  memory: 인프로세스(키 없이 구동) / redis: 공유 캐시(compose·배포)
+    cache_backend: str = "memory"
+    cache_ttl_s: int = 86400            # 대사 캐시 TTL(초) — 기본 1일
+    tourapi_cache_ttl_s: int = 604800   # 노드 상세(overview) 캐시 TTL — 기본 7일(거의 정적)
+
     # --- 지역 인메모리 캐시 (존 서버 패턴) ---
     region_cache_max: int = 8           # 동시 상주 지역 수 (LRU)
 
