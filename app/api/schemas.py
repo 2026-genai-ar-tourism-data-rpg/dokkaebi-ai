@@ -74,6 +74,7 @@ class ScenarioGenRequest(BaseModel):
     budget: int | None = None
     region: str = "종로"
     with_dialogue: bool = True
+    with_content: bool = True
 
 
 class ScenarioGenResponse(BaseModel):
