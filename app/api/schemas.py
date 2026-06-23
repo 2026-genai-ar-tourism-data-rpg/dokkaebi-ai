@@ -72,6 +72,7 @@ class ScenarioGenRequest(BaseModel):
     transport: str = "walk"
     wishlist: list[WishItemSchema] = Field(default_factory=list)
     budget: int | None = None
+    no_meals: bool = False                               # '밥 안 먹음' → 식음 노드 skip
     region: str = "종로"
     with_dialogue: bool = True
     with_content: bool = True

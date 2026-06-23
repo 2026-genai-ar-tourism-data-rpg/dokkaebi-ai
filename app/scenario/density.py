@@ -22,3 +22,17 @@ def density_label(node: dict) -> str:
 def reward_weight(tier: str) -> float:
     """비인기지 보상 가중치(분산 유도). 실수치는 EDA로 확정."""
     return 1.5 if tier == "low_traffic" else 1.0
+
+
+def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
+    """[STUB → 박준형] 비인기 노드 중 k개를 경로 앵커(샛길)로 선택. build_route ① 단계 hook.
+
+    nodes: 반경 내 거리순 후보. k: 끼워넣을 비인기 앵커 수(config.scenario_lowtraffic_anchors).
+    반환: 경로에 강제 포함할 비인기 노드 dict 리스트(node_id 키 필수). 지금은 빈 리스트.
+
+    TODO(박준형):
+      1) density_label을 빅데이터 실수치로 교체(집중률 TatsCnctrRate + 중심성 LocgoHubTar EDA 컷오프)
+      2) low_traffic 노드 중 거리/보상 가중(reward_weight) 고려해 상위 k개 선택
+      3) bigdata.py의 concentration_rate / hub_attractions 활용(코드 매칭 주의: tAtsCd ≠ contentId)
+    """
+    return []

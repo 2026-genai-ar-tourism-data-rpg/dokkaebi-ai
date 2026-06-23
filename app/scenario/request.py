@@ -36,7 +36,8 @@ class ScenarioRequest:
     radius_m: int | None = None                    # 선택 — 없으면 transport로 자동
     transport: str = "walk"                        # walk | car → 반경 결정
     wishlist: list[WishItem] = field(default_factory=list)  # 선택 — 앵커(여러 개 허용)
-    budget: int | None = None                      # 선택 — MVP는 표시만(생성 미반영)
+    budget: int | None = None                      # 선택 — 식음 예산 게이팅(정찬희) + 표시
+    no_meals: bool = False                         # 선택 — '밥 안 먹음' → 식음 노드 통째 skip
     region: str = "종로"
     # 나중 입력(자리만): visit_date · companions(혼자/친구) · difficulty
     with_dialogue: bool = True                     # NPC 대사 LLM 생성 여부(토큰)

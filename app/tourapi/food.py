@@ -30,3 +30,19 @@ def nearby_food(map_x: float, map_y: float, budget: int | None = None, limit: in
         total += f["spend"]
         out.append({**f, "coupon": {"to_kind": "food", "amount": 500}})
     return out
+
+
+def interleave_food(route: list[dict], *, budget: int | None = None) -> list[dict]:
+    """[STUB → 정찬희] 관광지 시퀀스(route) 사이사이에 카페/식당 노드 삽입. build_route ④ 단계 hook.
+
+    route: 확정된 관광지 노드 시퀀스(거리순+피날레). budget: 예산(예상지출 합 게이팅).
+    반환: 식음 노드가 끼워진 새 route. 지금은 route 그대로(no-op) → 기존 동작 보존.
+    호출 측(build_route)에서 '밥 싫음(no_meals)'이면 아예 호출 안 함.
+
+    TODO(정찬희):
+      1) _MOCK_FOOD → TourAPI contentTypeId=39(음식점)/카카오 실데이터로 교체
+      2) 노드 사이 위치(점심 시간대·동선 중간)에 nearby_food 결과를 예산 내에서 삽입
+      3) ⚠️ 삽입한 식음 노드는 kind="food"/"cafe" 마커 필수 → generator._build_quest가
+         '기억석 조각'으로 오인하지 않도록(fragment_id·is_finale 부여 제외) 분기 필요
+    """
+    return route
