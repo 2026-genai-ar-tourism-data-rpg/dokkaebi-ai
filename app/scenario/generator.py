@@ -16,8 +16,9 @@ from app.region.memory_cache import get_region_cache
 from app.scenario.density import density_label
 from app.scenario.node_content import assign_mission_type, generate_mission, to_quiz
 from app.scenario.request import ScenarioRequest
+from app.scenario.route_builder import build_route
 from app.services.dialogue_service import run_dialogue
-from app.tourapi.client import TourAPIClient, haversine_m
+from app.tourapi.client import TourAPIClient
 
 logger = get_logger(__name__)
 
@@ -41,12 +42,13 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
         req.start.lng, req.start.lat, region=req.region, radius_m=radius,
         with_dialogue=req.with_dialogue, with_content=req.with_content,
         end_x=end.lng if end else None, end_y=end.lat if end else None,
+        wishlist=req.wishlist, budget=req.budget, no_meals=req.no_meals,
     )
     # 입력 메타 부착(저장·검증용)
     scn["created_by"] = req.user_id
     scn["budget"] = req.budget
     scn["transport"] = req.transport
-    # TODO(생성로직 나중): wishlist 앵커를 경로에 강제 포함(앵커+샛길 11-3). 현재는 거리순만.
+    # wishlist 앵커 강제포함은 route_builder.build_route(① 단계, 이지선)가 처리. 여기선 메타만.
     if req.wishlist:
         scn["wishlist_content_ids"] = [w.content_id for w in req.wishlist]
     return scn
@@ -57,12 +59,14 @@ async def generate_basic_scenario(
     radius_m: int | None = None, count: int | None = None,
     with_dialogue: bool = True, with_content: bool = True,
     end_x: float | None = None, end_y: float | None = None,
+    wishlist: list | None = None, budget: int | None = None, no_meals: bool = False,
 ) -> dict:
     """[거리순 v0] 가까운 N개 관광지로 '기억석 챕터' 생성 + 장소기반 NPC 대사.
 
     map_x=경도, map_y=위도. end_x/y 주면 끝점에 가장 가까운 노드를 피날레로.
     with_dialogue=True면 각 노드 LLM 대사(그래프) 생성.
-    담당: 노드 선택 규칙(앵커+샛길·비인기) 교체 = 박준형 / 페르소나 시드 = 이지선.
+    노드 선택/배열(앵커·비인기·식음)은 route_builder.build_route로 분리 — hook별 오너:
+    비인기=박준형 / 위시=이지선 / 식음=정찬희 / 분기·seam=김예슬.
     """
     s = get_settings()
     radius_m = radius_m or s.scenario_default_radius_m
@@ -72,11 +76,12 @@ async def generate_basic_scenario(
     nodes = await _tour.location_based_list(map_x, map_y, radius_m, content_type_id=s.scenario_content_type_id)
     if not nodes:
         raise DokkaebiAIError(f"반경 {radius_m}m 내 관광지 없음 (좌표 {map_x},{map_y})")
-    route = nodes[:count]
-    # 끝점(집)이 있으면 끝점에 가장 가까운 노드를 피날레(맨 뒤)로 — 출발→경유→집 동선
-    if end_x is not None and end_y is not None and len(route) > 1:
-        finale = min(route, key=lambda nd: haversine_m(end_y, end_x, nd["map_y"], nd["map_x"]))
-        route = [nd for nd in route if nd["node_id"] != finale["node_id"]] + [finale]
+    # 1.5) 노드 선택/배열 seam — 앵커 강제포함 + 거리순 채우기 + 피날레 + 식음 삽입
+    route = build_route(
+        nodes, count=count, end_x=end_x, end_y=end_y,
+        wishlist=wishlist, budget=budget, no_meals=no_meals,
+        lowtraffic_k=s.scenario_lowtraffic_anchors,
+    )
     total = len(route)
 
     # 2) 각 노드 overview 보강 (mock=내장 / 실데이터=detailCommon2 병렬)

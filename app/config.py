@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     scenario_default_radius_m: int = 2000
     scenario_radius_walk_m: int = 2000   # 이동수단=도보 기본 반경
     scenario_radius_car_m: int = 8000    # 이동수단=차 기본 반경
+    # 노드 선택 hook 스위치(build_route) — 0=off면 기존 거리순 동작 그대로
+    scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 박준형 EDA 후 >0
+    scenario_food_per_route: int = 0      # 경로당 삽입할 카페/식당 수 — 정찬희 실데이터 후 >0
 
     # --- 캐시 (대사·노드 상세) ---
     #  memory: 인프로세스(키 없이 구동) / redis: 공유 캐시(compose·배포)

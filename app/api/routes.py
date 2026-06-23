@@ -56,6 +56,7 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         transport=req.transport,
         wishlist=[WishItem(content_id=w.content_id, lat=w.lat, lng=w.lng, kind=w.kind) for w in req.wishlist],
         budget=req.budget,
+        no_meals=req.no_meals,
         region=req.region,
         with_dialogue=req.with_dialogue,
         with_content=req.with_content,
