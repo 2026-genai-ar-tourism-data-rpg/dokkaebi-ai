@@ -76,8 +76,32 @@ class Settings(BaseSettings):
     scenario_radius_walk_m: int = 2000   # 이동수단=도보 기본 반경
     scenario_radius_car_m: int = 8000    # 이동수단=차 기본 반경
     # 노드 선택 hook 스위치(build_route) — 0=off면 기존 거리순 동작 그대로
-    scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 박준형 EDA 후 >0
+    scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 이지선 구현, 테스트 시 >0
     scenario_food_per_route: int = 0      # 경로당 삽입할 카페/식당 수 — 정찬희 실데이터 후 >0
+
+    # --- 비인기지역 앵커 선택 (TourAPI BigData 기반) ---
+    # MVP는 종로 고정. 지역 확장 시 density_region_code_map에 매핑 추가.
+    density_default_region: str = "종로"
+    density_region_code_map: dict[str, dict[str, str]] = {
+        "종로": {"areaCd": "11", "signguCd": "11110"}
+    }
+    density_hub_popular_top_n: int = 20       # hubRank <= N이면 중심 관광지로 보고 제외
+    density_allowed_hub_category: str = "관광지"
+
+    # BigData bulk fetch: numOfRows는 페이지당 row 수. 종로 실측 3390 rows → 1000이면 약 4페이지.
+    density_cnctr_num_of_rows: int = 1000
+    density_cnctr_max_pages: int = 20
+    density_hub_num_of_rows: int = 100
+    density_hub_max_pages: int = 20
+    density_hub_base_months_ago: int = 3
+
+    # Selection / fallback
+    density_candidate_limit: int = 20         # API/매칭 평가 대상 후보 수
+    density_targeted_fallback_limit: int = 3  # 벌크 매칭 실패 시 개별 tAtsNm 조회 허용 수
+    density_targeted_num_of_rows: int = 30    # 개별 tAtsNm 조회 page size
+
+    # Cache
+    density_bigdata_cache_ttl_s: int = 21600  # 6시간
 
     # --- 캐시 (대사·노드 상세) ---
     #  memory: 인프로세스(키 없이 구동) / redis: 공유 캐시(compose·배포)
