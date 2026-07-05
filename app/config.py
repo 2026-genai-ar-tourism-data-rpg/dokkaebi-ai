@@ -79,6 +79,27 @@ class Settings(BaseSettings):
     scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 박준형 EDA 후 >0
     scenario_food_per_route: int = 0      # 경로당 삽입할 카페/식당 수 — 정찬희 실데이터 후 >0
 
+    # --- 식음 삽입/예산 게이팅 (food.py — 박준형) ---
+    food_min_meal_target_krw: int = 4000  # 식사 슬롯 성립 최소 1인 예산 (정책값) — 미만이면 카페 다운그레이드
+    food_min_cafe_target_krw: int = 2500  # 카페 슬롯 성립 최소 1인 예산 (정책값) — 미만이면 식음 0개 폴백
+    food_search_radius_m: int = 600       # 삽입 지점(구간 중간) 주변 후보 검색 반경
+    food_fetch_rows: int = 30             # TourAPI 39 후보 fetch 개수
+    # 1인 예산 → 목표 가격대 밴드(₩~₩₩₩₩) 경계 — ⚠️ "정책값"(데이터 주장 아님):
+    #  구글은 priceLevel의 원화 기준을 공개하지 않으므로 이 경계는 팀이 정하는 규칙
+    #  (trigger_radius처럼). 데모 돌려보며 팀이 조정.
+    food_band1_max_krw: int = 10000       # 미만 = ₩
+    food_band2_max_krw: int = 30000       # 미만 = ₩₩
+    food_band3_max_krw: int = 60000       # 미만 = ₩₩₩, 이상 = ₩₩₩₩
+    food_unknown_band_score: float = 1.5  # 가격대 미상 후보의 매칭 점수 (일치=0, 1밴드 아래=1)
+
+    # --- Google Places priceLevel (google_places.py — 박준형) ---
+    #  ⚠️ 채택 조건부: scripts/measure_price_coverage.py 종로 보유율 실측 후 확정 (HANDOFF §6)
+    #  키 없으면 가격대 미상 처리(호출 0). billing 연결 + 콘솔 일일 상한 설정은 사람이 할 것.
+    google_maps_api_key: str = ""
+    google_places_timeout: float = 10.0
+    google_places_semaphore: int = 5      # 동시 priceLevel 조회 상한
+    google_price_cache_ttl_s: int = 604800  # 7일 — 업소 가격대는 거의 안 바뀜(무료쿼터 절약)
+
     # --- 캐시 (대사·노드 상세) ---
     #  memory: 인프로세스(키 없이 구동) / redis: 공유 캐시(compose·배포)
     cache_backend: str = "memory"
