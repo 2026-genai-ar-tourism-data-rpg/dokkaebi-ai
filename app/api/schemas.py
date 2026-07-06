@@ -85,6 +85,7 @@ class ScenarioGenResponse(BaseModel):
     region: str
     type: str = "custom"
     node_sequence: list[dict]
+    stone_total: int | None = None      # 기억석 조각 총수(식음 노드 제외)
     anchor_node_id: str | None = None
     is_public: bool = False
     created_by: str | None = None
