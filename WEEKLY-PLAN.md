@@ -36,11 +36,11 @@
 - **증상:** `generator._build_quest`가 `route`의 **모든** 노드에 `fragment_id`를 붙임
   → 박준형 hook이 삽입한 `kind="food"/"cafe"` 노드가 **기억석 조각으로 오인**되고,
   `total`(조각 수)·타이틀 "N조각 코스"가 식음노드만큼 **부풀어남**.
-- **해야 할 것:**
-  - [ ] `generator`의 route 루프에서 **식음노드는 조각 카운트/`fragment_id`에서 제외** (`kind in {"food","cafe"}` 분기)
-  - [ ] 식음노드는 별도 퀘스트 타입(경유/보상)으로 조립 — NPC 대사·미션은 붙이되 기억석 미션 아님
-  - [ ] `total`·`fragment_id` 재계산이 **관광 노드 기준**이 되도록 (피날레 조각수 정확)
-  - [ ] 회귀 테스트: 식음 ON일 때 조각 수 = 관광노드 수, 식음 OFF와 조각 수 동일
+- **해야 할 것:** ✅ **완료 (2026-07-07, `quest-foodnode/kys-pjh/v1` 커밋 `a7d2aa6`)**
+  - [x] `generator`의 route 루프에서 **식음노드는 조각 카운트/`fragment_id`에서 제외** (`_plan_nodes`가 `kind in {"food","cafe"}` 분기)
+  - [x] 식음노드는 별도 퀘스트 타입(경유/보상)으로 조립 (`_build_food_quest` — 대사·쿠폰만, 기억석 미션·fragment 없음)
+  - [x] `total`·`fragment_id` 재계산이 **관광 노드 기준** (`stone_total` 필드 추가)
+  - [x] 회귀 테스트: `test_foodnode.py` 8종 — 식음 ON일 때 조각=관광노드, 식음 OFF와 동일 (전체 35 통과)
 - **PR:** 한 PR로 (`quest-foodnode/kys-pjh/v1`) — generator는 김예슬, 판정 규칙·마커는 박준형
 - **경계:** 이거 끝나기 전엔 "전 조건 ON E2E"가 의미 없음 → **이번 주 1번으로 처리**
 
@@ -51,16 +51,20 @@
 ### 🟦 김예슬 (kys) — 통합 오너 + ② 경로 분기
 - **위치:** ③ 조립 통합 + ②의 유일한 모양 변경
 - **이번 주:**
-  - [ ] §1 식음노드 오인 방지 공동 PR (generator 측)
-  - [ ] **전 조건 ON E2E**: 위시+비인기+식음+예산 전부 켜고 종로 시나리오 1개 끝까지 (앵커 강제포함·비인기 샛길·식음 삽입이 실제로 route에 다 반영되는지)
-  - [ ] **경로 분기 착수**: `node_sequence` 선형 → 트리(선택 분기). `run_branching`(런타임 대화 분기)은 이미 배선됨 → 그 위에 **route 분기** 얹기. **eager(미리 생성) vs lazy(밟을 때 생성)** 결정이 핵심
-  - [ ] 잡정리: [route_builder.py](app/scenario/route_builder.py) 주석의 **담당자 이름 정정**(위시=정찬희, 비인기=이지선, 식음=박준형으로 뒤바뀜)
-- **브랜치:** `quest-foodnode/kys-pjh/v1` → `route-branching/kys/v1`
+  - [x] §1 식음노드 오인 방지 공동 PR (generator 측) — 완료
+  - [x] **전 조건 ON E2E** (2026-07-07): 위시+비인기+식음+예산 전부 켜고 종로 시나리오 1개 생성 확인.
+        결과: 노드 7(관광 5 + 식음 2), `stone_total=5`, **조각수=관광노드수 ✓**, 식음 `fragment_id` 전부 None ✓, 위시(경복궁) 반영 ✓.
+        ⚠️ **비인기 앵커는 0개 반영** — config·density 실데이터(snapshot 6개)는 정상인데 **snapshot 지역명 ↔ TourAPI 노드명 매칭 실패** → 이지선 hook 확인 필요(§이지선 항목).
+  - [x] 잡정리: [route_builder.py](app/scenario/route_builder.py) 주석 담당자 이름 정정 — 완료
+  - [x] (계획 외) 동선 개선: 위시앵커 dist_m backfill + NN/2-opt 정렬 (`route-nn`), 위시 좌표·이름 버그픽스, 식음 dist_m
+  - [ ] **경로 분기 착수**: `node_sequence` 선형 → 트리(선택 분기). `run_branching`(런타임 대화 분기)은 이미 배선됨 → 그 위에 **route 분기** 얹기. **eager(미리 생성) vs lazy(밟을 때 생성)** 결정이 핵심 ← **§1이 dev 올라가면 착수**
+- **브랜치:** `quest-foodnode/kys-pjh/v1`(완료, 미푸시) → `route-branching/kys/v1`
 
 ### 🟩 이지선 (ljs) — 비인기 마감 + M3 밸런싱 데이터 선행
 - **위치:** ① 비인기(완료) 검증 → M3 밸런싱 준비
 - **이번 주:**
   - [ ] 비인기 앵커 **통합 검증**: 컷오프(집중률/중심성)로 뽑힌 샛길이 실제 route에 끼는지, 실데이터 결측 시 폴백(`[]`) 정상인지
+    - 🔴 **kys E2E(07-07)에서 발견**: `lowtraffic_anchors=2`로 켰는데 **실제 route에 비인기 앵커 0개**. config·snapshot(6개) 정상 → **snapshot 지역명 ↔ TourAPI 노드명 매칭이 안 됨**. 이름 정규화/매칭 키 점검 필요. (재현: `DOKKAEBI_SCENARIO_LOWTRAFFIC_ANCHORS=2`로 종로 시나리오 생성)
   - [ ] 컷오프 튜닝: 종로 실분포 기준 임계값 재조정 (너무 많이/적게 뽑히지 않게)
   - [ ] **(M3 선행)** 혼잡도 → 비인기지 **보상 가중치 밸런싱 데이터** 초안
   - [ ] **디자인:** 위시리스트·시나리오 라이브러리 UI 설계 착수 (M3용, 정찬희 구현 기반 제공)
