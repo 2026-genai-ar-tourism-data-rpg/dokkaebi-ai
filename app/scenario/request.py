@@ -17,8 +17,9 @@ class LatLng:
 
 @dataclass
 class WishItem:
-    """위시리스트 항목 — 자동완성(searchKeyword2)에서 '확정된' 1개. 이름 문자열 ❌(모호)."""
+    """위시리스트 항목 — 자동완성(searchKeyword2)에서 '확정된' 1개. 식별 키는 content_id."""
     content_id: str
+    name: str | None = None    # 표시용(합성 앵커 이름). 식별 키 아님 — 매칭은 content_id로
     lat: float | None = None
     lng: float | None = None
     kind: str = "attraction"   # attraction | restaurant(나중)
