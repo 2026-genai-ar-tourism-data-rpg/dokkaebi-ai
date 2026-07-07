@@ -117,7 +117,7 @@ async def generate_basic_scenario(
         raise DokkaebiAIError(f"반경 {radius_m}m 내 관광지 없음 (좌표 {map_x},{map_y})")
     # 1.5) 노드 선택/배열 seam — 앵커 강제포함 + 거리순 채우기 + 피날레 + 식음 삽입
     route = build_route(
-        nodes, count=count, end_x=end_x, end_y=end_y,
+        nodes, count=count, start_x=map_x, start_y=map_y, end_x=end_x, end_y=end_y,
         wishlist=wishlist, budget=budget, no_meals=no_meals,
         lowtraffic_k=s.scenario_lowtraffic_anchors,
     )
