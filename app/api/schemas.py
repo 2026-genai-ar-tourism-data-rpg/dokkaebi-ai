@@ -58,6 +58,7 @@ class LatLngSchema(BaseModel):
 class WishItemSchema(BaseModel):
     """위시리스트 항목 — searchKeyword2 자동완성에서 확정된 content_id."""
     content_id: str
+    name: str | None = None                              # 표시용(합성 앵커 이름)
     lat: float | None = None
     lng: float | None = None
     kind: str = "attraction"

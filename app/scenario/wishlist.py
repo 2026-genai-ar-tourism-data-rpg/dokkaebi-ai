@@ -55,16 +55,17 @@ def _to_anchor(node: dict) -> dict:
     return {**node, "source": SOURCE_WISHLIST, OUT_OF_RADIUS_FLAG: False}
 
 
-def _synthesize_anchor(content_id: str, lat: float | None, lng: float | None) -> dict:
+def _synthesize_anchor(content_id: str, name: str | None,
+                       lat: float | None, lng: float | None) -> dict:
     """반경 밖(매칭 없음) 위시를 좌표 기반 합성 앵커 노드로 생성.
 
-    WishItem에는 name 필드가 없어 name=None(서버/앱이 detail 조회로 보강 필요).
+    name은 WishItem.name(앱 자동완성에서 확정한 표시 이름). 없으면 None.
     dist_m은 origin 좌표가 이 hook에 들어오지 않아 None — 동선화 시 build_route/generator가
-    채운다. lat/lng가 None이면 지도 배치 불가한 합성 노드가 된다(WARN).
+    채운다. lat/lng가 None이면 지도 배치 불가한 합성 노드가 된다(WARN → seam에서 드롭).
     """
     return {
         "node_id": f"{WISH_NODE_PREFIX}{content_id}",
-        "name": None,            # WishItem에 name 없음 — 배선부/서버가 보강
+        "name": name,            # 앱이 넘긴 표시 이름(없으면 None)
         "map_x": lng,            # 경도(lng) → map_x
         "map_y": lat,            # 위도(lat) → map_y
         "dist_m": None,          # origin 좌표가 hook에 없음 → 배선부에서 산출
@@ -147,7 +148,7 @@ def select_wishlist_anchors(nodes: list[dict], wishlist: list) -> list[dict]:
                 "위시 content_id=%s 반경 내 매칭 없음 → 좌표 합성 앵커(map_x=%s, map_y=%s)",
                 content_id, lng, lat,
             )
-        anchors.append(_synthesize_anchor(content_id, lat, lng))
+        anchors.append(_synthesize_anchor(content_id, wish.name, lat, lng))
         synthesized += 1
 
     logger.info(
