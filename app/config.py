@@ -76,13 +76,13 @@ class Settings(BaseSettings):
     scenario_radius_walk_m: int = 2000   # 이동수단=도보 기본 반경
     scenario_radius_car_m: int = 8000    # 이동수단=차 기본 반경
     # 노드 선택 hook 스위치(build_route) — 0=off면 기존 거리순 동작 그대로
-    scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 이지선 구현, 테스트 시 >0
+    scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 박준형 EDA 후 >0
     scenario_food_per_route: int = 0      # 경로당 삽입할 카페/식당 수 — 정찬희 실데이터 후 >0
 
     # --- 식음 삽입/예산 게이팅 (food.py — 박준형) ---
     food_min_meal_target_krw: int = 4000  # 식사 슬롯 성립 최소 1인 예산 (정책값) — 미만이면 카페 다운그레이드
     food_min_cafe_target_krw: int = 2500  # 카페 슬롯 성립 최소 1인 예산 (정책값) — 미만이면 식음 0개 폴백
-    food_search_radius_m: int = 600       # 삽입 지점(구간 중간) 주변 후보 검색 반경
+    food_search_radius_m: int = 1000       # 삽입 지점(구간 중간) 주변 후보 검색 반경
     food_fetch_rows: int = 30             # TourAPI 39 후보 fetch 개수
     # 1인 예산 → 목표 가격대 밴드(₩~₩₩₩₩) 경계 — ⚠️ "정책값"(데이터 주장 아님):
     #  구글은 priceLevel의 원화 기준을 공개하지 않으므로 이 경계는 팀이 정하는 규칙
@@ -90,38 +90,15 @@ class Settings(BaseSettings):
     food_band1_max_krw: int = 10000       # 미만 = ₩
     food_band2_max_krw: int = 30000       # 미만 = ₩₩
     food_band3_max_krw: int = 60000       # 미만 = ₩₩₩, 이상 = ₩₩₩₩
-    food_unknown_band_score: float = 1.5  # 가격대 미상 후보의 매칭 점수 (일치=0, 1밴드 아래=1)
+    food_unknown_band_score: float | None = None  # None = 미상 후보 배제
 
     # --- Google Places priceLevel (google_places.py — 박준형) ---
     #  ⚠️ 채택 조건부: scripts/measure_price_coverage.py 종로 보유율 실측 후 확정 (HANDOFF §6)
     #  키 없으면 가격대 미상 처리(호출 0). billing 연결 + 콘솔 일일 상한 설정은 사람이 할 것.
-    google_maps_api_key: str = ""
+    google_maps_api_key: str = "" # 필드 선언
     google_places_timeout: float = 10.0
     google_places_semaphore: int = 5      # 동시 priceLevel 조회 상한
     google_price_cache_ttl_s: int = 604800  # 7일 — 업소 가격대는 거의 안 바뀜(무료쿼터 절약)
-    # --- 비인기지역 앵커 선택 (TourAPI BigData 기반) ---
-    # MVP는 종로 고정. 지역 확장 시 density_region_code_map에 매핑 추가.
-    density_default_region: str = "종로"
-    density_region_code_map: dict[str, dict[str, str]] = {
-        "종로": {"areaCd": "11", "signguCd": "11110"}
-    }
-    density_hub_popular_top_n: int = 20       # hubRank <= N이면 중심 관광지로 보고 제외
-    density_allowed_hub_category: str = "관광지"
-
-    # BigData bulk fetch: numOfRows는 페이지당 row 수. 종로 실측 3390 rows → 1000이면 약 4페이지.
-    density_cnctr_num_of_rows: int = 1000
-    density_cnctr_max_pages: int = 20
-    density_hub_num_of_rows: int = 100
-    density_hub_max_pages: int = 20
-    density_hub_base_months_ago: int = 3
-
-    # Selection / fallback
-    density_candidate_limit: int = 20         # API/매칭 평가 대상 후보 수
-    density_targeted_fallback_limit: int = 3  # 벌크 매칭 실패 시 개별 tAtsNm 조회 허용 수
-    density_targeted_num_of_rows: int = 30    # 개별 tAtsNm 조회 page size
-
-    # Cache
-    density_bigdata_cache_ttl_s: int = 21600  # 6시간
 
     # --- 캐시 (대사·노드 상세) ---
     #  memory: 인프로세스(키 없이 구동) / redis: 공유 캐시(compose·배포)

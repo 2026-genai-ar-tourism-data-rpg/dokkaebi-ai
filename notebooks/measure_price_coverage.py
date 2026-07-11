@@ -79,6 +79,11 @@ async def google_text_search(client: httpx.AsyncClient, api_key: str, cand: dict
     }
     r = await client.post(GOOGLE_TEXT, json=body, headers={
         "X-Goog-Api-Key": api_key, "X-Goog-FieldMask": FIELDS})
+    
+    if r.status_code != 200:
+        print("GOOGLE ERROR:", r.status_code, r.text)
+    r.raise_for_status()
+    
     r.raise_for_status()
     places = r.json().get("places", [])
     if not places:
