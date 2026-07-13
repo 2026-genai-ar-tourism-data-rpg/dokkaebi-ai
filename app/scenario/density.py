@@ -74,7 +74,7 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
         return []
 
     concentration_index = _build_concentration_index(concentration_rows)
-    hub_candidates = _filter_hub_rows(hub_rows, s.density_allowed_hub_category)
+    hub_candidates = _rank_hub_rows(_filter_hub_rows(hub_rows, s.density_allowed_hub_category))
 
     selected_candidates: list[dict[str, Any]] = []
     fallback_used = 0
@@ -98,9 +98,11 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
         avg_rate = _avg_cnctr_rate(matched_rows)
         if avg_rate is None:
             continue
+        if avg_rate > s.density_lowtraffic_max_avg_rate:
+            continue  # 근처 후보 중 상대적으로 덜 혼잡해도, 절대적으로 혼잡하면 비인기 아님
 
         hub_row = _match_hub_row(node, hub_candidates)
-        hub_rank = _parse_int(hub_row.get("hubRank")) if hub_row else None
+        hub_rank = hub_row.get("_local_rank") if hub_row else None
         if hub_rank is not None and hub_rank <= s.density_hub_popular_top_n:
             continue
 
@@ -165,6 +167,16 @@ def _filter_hub_rows(rows: list[dict], category: str | None) -> list[dict]:
     if not category:
         return rows
     return [row for row in rows if row.get("hubCtgryLclsNm") == category]
+
+
+def _rank_hub_rows(rows: list[dict]) -> list[dict]:
+    """hubRank(전역·카테고리 혼재 순위) 대신 필터링된 카테고리 안에서의 상대순위(_local_rank)를 매긴다.
+
+    원본 hubRank는 관광지+숙박이 섞인 순위라 그대로 top_n과 비교하면 호텔이 슬롯을 잠식한다.
+    원본 row(snapshot 캐시 공유 객체)는 변경하지 않고 얕은 복사본에 순위를 붙여 반환한다.
+    """
+    ranked = sorted(rows, key=lambda row: _rank_sort_value(row.get("hubRank")))
+    return [{**row, "_local_rank": i} for i, row in enumerate(ranked, start=1)]
 
 
 def _match_hub_row(node: dict, rows: list[dict]) -> dict | None:
