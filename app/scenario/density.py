@@ -61,25 +61,33 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
     s = get_settings()
     snapshot = fetch_density_snapshot_sync(s.density_default_region)
     if not snapshot:
+        logger.warning("비인기 앵커 BigData snapshot 없음: region=%s", s.density_default_region)
         return []
 
     concentration_rows = snapshot.get("concentration_rows") or []
     hub_rows = snapshot.get("hub_rows") or []
     if not concentration_rows or not hub_rows:
+        logger.warning(
+            "비인기 앵커 BigData row 부족: concentration=%d, hub=%d",
+            len(concentration_rows), len(hub_rows),
+        )
         return []
 
     area_cd = snapshot.get("areaCd")
     signgu_cd = snapshot.get("signguCd")
     if not area_cd or not signgu_cd:
+        logger.warning("비인기 앵커 지역 코드 없음: areaCd=%s, signguCd=%s", area_cd, signgu_cd)
         return []
 
     concentration_index = _build_concentration_index(concentration_rows)
     hub_candidates = _rank_hub_rows(_filter_hub_rows(hub_rows, s.density_allowed_hub_category))
 
+    candidate_pool = nodes[:s.density_candidate_limit]
     selected_candidates: list[dict[str, Any]] = []
     fallback_used = 0
+    fallback_hit = 0
 
-    for node in nodes[:s.density_candidate_limit]:
+    for node in candidate_pool:
         if not node.get("node_id"):
             continue
 
@@ -88,12 +96,16 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
             continue
 
         matched_rows = _match_concentration_rows(name, concentration_index)
+        used_fallback = False
         if matched_rows is None and fallback_used < s.density_targeted_fallback_limit:
             fallback_used += 1
+            used_fallback = True
             matched_rows = fetch_concentration_by_name_sync(area_cd, signgu_cd, name)
 
         if not matched_rows:
             continue
+        if used_fallback:
+            fallback_hit += 1
 
         avg_rate = _avg_cnctr_rate(matched_rows)
         if avg_rate is None:
@@ -113,19 +125,32 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
             "dist_m": _parse_float(node.get("dist_m"), default=math.inf),
         })
 
+    if fallback_used > 0:
+        logger.info("비인기 앵커 fallback 조회: 시도 %d회 / 성공 %d회", fallback_used, fallback_hit)
+
     if not selected_candidates:
+        logger.info(
+            "비인기 앵커 후보 %d개 평가, 컷오프 통과 0개 → 앵커 미삽입", len(candidate_pool)
+        )
         return []
 
+    # hub_rank=None(hub 목록에 아예 없음)을 "가장 무명"으로 취급하도록 -inf를 부여한다.
+    # (구버전 -(hub_rank or 0)은 None이 0이 되어, 오히려 순위가 매겨진 후보보다 후순위로 밀리는 버그였음)
     selected_candidates.sort(
         key=lambda item: (
             item["avg_rate"],
-            -(item["hub_rank"] or 0),
+            -math.inf if item["hub_rank"] is None else -item["hub_rank"],
             item["dist_m"],
         )
     )
     selected = [item["node"] for item in selected_candidates[:k]]
     for node in selected:
         node["density_tier"] = "low_traffic"
+    logger.info(
+        "비인기 앵커 %d개 선택: %s",
+        len(selected),
+        ", ".join(node.get("name", "") for node in selected),
+    )
     return selected
 
 
