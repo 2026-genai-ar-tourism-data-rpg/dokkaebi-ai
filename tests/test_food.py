@@ -1,7 +1,13 @@
 # ============================================================
-# [v3] food.py 단위테스트 — 구글 priceLevel 밴드 방식 (네트워크 0, 전부 결정론)
+# [v4] food.py 단위테스트 — 구글 priceLevel 밴드 방식 (네트워크 0, 전부 결정론)
 # 골든 케이스 = 시나리오_MVP_예시 §0: 안국역 · 예산 20,000원 · (인원수 변수화)
-# 구현일: 2026-07-04 | 작성: pjh (food-budget/pjh/v1)
+#
+# v4 변경 (2026-07-11, 커버리지 실측 40% 대응):
+#   · 미상(price_band=None) = 하드컷 — "가격 모르는 가게 추천" 금지 정책 확정
+#     (v3까지는 미상=1.5점 통과 → 저예산에서 유효 후보가 전부 잘리고 미상만
+#      살아남아 뽑히는 역설 발생. 실측: 예산 8,000원 → 뉘조(미상) 삽입)
+#   · §6 경계 케이스 테스트 추가 (예산 0/과다, 후보 0, 전부 미상, 다운그레이드)
+# 구현일: 2026-07-04 | v4: 2026-07-11 | 작성: pjh (food-realdata/pjh/v1)
 # 실행: pytest tests/test_food.py  (env 스위치 미설정 상태 기준)
 # ============================================================
 import pytest
@@ -41,6 +47,16 @@ CANDS = [
      "map_y": 37.5721, "map_x": 126.9861},
 ]
 
+# ---- [v4] 밴드가 전부 미상인 후보 풀 (실측: 종로 후보의 60%가 이 상태) ----
+CANDS_ALL_UNKNOWN = [
+    {"node_id": "food_u1", "name": "미상식당A", "kind": "food",
+     "price_band": None, "price_band_label": "가격대 정보 없음", "price_source": None,
+     "map_y": 37.5721, "map_x": 126.9861},
+    {"node_id": "food_u2", "name": "미상카페B", "kind": "cafe",
+     "price_band": None, "price_band_label": "가격대 정보 없음", "price_source": None,
+     "map_y": 37.5741, "map_x": 126.9855},
+]
+
 
 # ============ 1. 예산 → 목표 밴드 (경계는 config 정책값) ============
 def test_budget_to_band_boundaries():
@@ -56,15 +72,19 @@ def test_headcount_lowers_target_band():
     assert budget_to_band(60_000 / 8) == 1
 
 
-# ============ 2. 밴드 매칭 — 일치 최우선, 초과 하드컷, 과소 감점, 미상 중간 ============
+# ============ 2. 밴드 매칭 — 일치 최우선, 초과 하드컷, 과소 감점, 미상 하드컷 ============
 def test_band_match_exact_beats_cheaper():
     assert band_match_score(2, target_band=2) == 0          # 딱 맞는 급 = 최고점
     assert band_match_score(1, target_band=2) == 1          # 한 밴드 아래 = 감점(허용)
     assert band_match_score(3, target_band=2) is None       # 초과 = 하드컷
 
-def test_unknown_band_between_one_and_two_below():
-    unknown = band_match_score(None, target_band=3)
-    assert band_match_score(2, 3) < unknown < band_match_score(1, 3)
+def test_unknown_band_is_hard_cut():
+    """[정책 v4, 2026-07-11] 밴드 미상 = 하드컷.
+    커버리지 실측 40%(종로): 낮은 목표 밴드에선 유효 후보가 전부 잘리고
+    미상만 살아남아 '가격 모르는 가게'가 뽑히는 역설 발생 → 미상 배제로 확정.
+    (되돌리려면 config food_unknown_band_score에 숫자 지정 — env 무코드 튜닝)"""
+    assert band_match_score(None, target_band=1) is None
+    assert band_match_score(None, target_band=4) is None
 
 def test_pick_candidate_prefers_exact_band():
     """목표 ₩₩일 때: 파스타(₩₩)가 국밥(₩)·한정식(₩₩₩)·미상보다 우선."""
@@ -75,6 +95,11 @@ def test_pick_candidate_hard_cuts_over_budget_band():
     """목표 ₩일 때: 한정식(₩₩₩)·파스타(₩₩)는 절대 안 뽑히고 국밥(₩)."""
     chosen = pick_candidate(CANDS, "food", target_band=1, exclude_ids=set())
     assert chosen["node_id"] == "food_gukbap"
+
+def test_unknown_never_beats_known_lower_band():
+    """미상 vs 밴드 아는 하위 후보 → 항상 밴드 아는 쪽 (미상은 후보 자격 자체가 없음)."""
+    chosen = pick_candidate(CANDS, "food", target_band=3, exclude_ids=set())
+    assert chosen["node_id"] != "food_unknown"
 
 
 # ============ 3. 슬롯 구성 — 다운그레이드/폴백 (정책 임계) ============
@@ -129,3 +154,44 @@ def test_no_invented_krw_estimates():
     """원 단위 추정(spend_est) 재유입 금지 — 밴드 방식 회귀 방지."""
     out = interleave_food(ROUTE, budget=20000, headcount=1, per_route=2, candidates=CANDS)
     assert all("spend_est" not in n for n in out)
+
+
+# ============ 6. [v4] 경계 케이스 — 커버리지 실측 40% 대응 (2026-07-11) ============
+def test_all_unknown_candidates_insert_nothing():
+    """핵심 회귀: 미상 후보만 있으면 삽입 0 — '가격 모르는 가게 추천' 금지.
+    (v3 실측: 예산 8,000원 → 유효 후보 전멸 → 뉘조(미상) 삽입되던 동작의 재발 방지)"""
+    out = interleave_food(ROUTE, budget=8000, headcount=1, per_route=2,
+                          candidates=CANDS_ALL_UNKNOWN)
+    assert out == ROUTE                                      # 경로는 그대로, 실패 아님
+
+def test_budget_zero_inserts_nothing_route_intact():
+    """예산 0 → 카페 최소 임계(2,500) 미달 → 슬롯 성립 불가 → 삽입 0, 경로 정상."""
+    out = interleave_food(ROUTE, budget=0, headcount=1, per_route=2, candidates=CANDS)
+    assert out == ROUTE
+
+def test_budget_huge_no_hard_cut_targets_top_band():
+    """예산 과다(100만) → 목표 ₩₩₩₩ → 어떤 유효 밴드도 하드컷 없음, 미상은 여전히 배제."""
+    assert budget_to_band(1_000_000) == 4
+    out = interleave_food(ROUTE, budget=1_000_000, headcount=1, per_route=2,
+                          candidates=CANDS)
+    food_nodes = [n for n in out if n.get("kind") in ("food", "cafe")]
+    assert food_nodes                                        # 삽입은 됨
+    assert all(n["price_band"] is not None for n in food_nodes)   # 미상 배제 유지
+
+def test_empty_candidates_no_crash():
+    """후보 0개 → 삽입 0, 크래시 없음, 경로 정상."""
+    out = interleave_food(ROUTE, budget=20000, headcount=1, per_route=2, candidates=[])
+    assert out == ROUTE
+
+def test_downgrade_path_also_hard_cuts_unknown():
+    """식사 후보가 미상뿐 → 카페 다운그레이드 경로에서도 미상 하드컷 유지.
+    밴드 아는 저가카페(₩)만 뽑히고 미상은 어느 슬롯에도 못 들어감."""
+    mixed = CANDS_ALL_UNKNOWN + [
+        {"node_id": "food_cheap_cafe", "name": "저가카페", "kind": "cafe",
+         "price_band": 1, "price_band_label": "₩", "price_source": "google",
+         "map_y": 37.5740, "map_x": 126.9856},
+    ]
+    out = interleave_food(ROUTE, budget=8000, headcount=1, per_route=2, candidates=mixed)
+    food_nodes = [n for n in out if n.get("kind") in ("food", "cafe")]
+    assert all(n["price_band"] is not None for n in food_nodes)
+    assert all(n["node_id"] not in ("food_u1", "food_u2") for n in food_nodes)
