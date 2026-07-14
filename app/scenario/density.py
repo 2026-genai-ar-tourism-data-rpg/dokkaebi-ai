@@ -61,25 +61,33 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
     s = get_settings()
     snapshot = fetch_density_snapshot_sync(s.density_default_region)
     if not snapshot:
+        logger.warning("비인기 앵커 BigData snapshot 없음: region=%s", s.density_default_region)
         return []
 
     concentration_rows = snapshot.get("concentration_rows") or []
     hub_rows = snapshot.get("hub_rows") or []
     if not concentration_rows or not hub_rows:
+        logger.warning(
+            "비인기 앵커 BigData row 부족: concentration=%d, hub=%d",
+            len(concentration_rows), len(hub_rows),
+        )
         return []
 
     area_cd = snapshot.get("areaCd")
     signgu_cd = snapshot.get("signguCd")
     if not area_cd or not signgu_cd:
+        logger.warning("비인기 앵커 지역 코드 없음: areaCd=%s, signguCd=%s", area_cd, signgu_cd)
         return []
 
     concentration_index = _build_concentration_index(concentration_rows)
-    hub_candidates = _filter_hub_rows(hub_rows, s.density_allowed_hub_category)
+    hub_candidates = _rank_hub_rows(_filter_hub_rows(hub_rows, s.density_allowed_hub_category))
 
+    candidate_pool = nodes[:s.density_candidate_limit]
     selected_candidates: list[dict[str, Any]] = []
     fallback_used = 0
+    fallback_hit = 0
 
-    for node in nodes[:s.density_candidate_limit]:
+    for node in candidate_pool:
         if not node.get("node_id"):
             continue
 
@@ -88,19 +96,25 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
             continue
 
         matched_rows = _match_concentration_rows(name, concentration_index)
+        used_fallback = False
         if matched_rows is None and fallback_used < s.density_targeted_fallback_limit:
             fallback_used += 1
+            used_fallback = True
             matched_rows = fetch_concentration_by_name_sync(area_cd, signgu_cd, name)
 
         if not matched_rows:
             continue
+        if used_fallback:
+            fallback_hit += 1
 
         avg_rate = _avg_cnctr_rate(matched_rows)
         if avg_rate is None:
             continue
+        if avg_rate > s.density_lowtraffic_max_avg_rate:
+            continue  # 근처 후보 중 상대적으로 덜 혼잡해도, 절대적으로 혼잡하면 비인기 아님
 
         hub_row = _match_hub_row(node, hub_candidates)
-        hub_rank = _parse_int(hub_row.get("hubRank")) if hub_row else None
+        hub_rank = hub_row.get("_local_rank") if hub_row else None
         if hub_rank is not None and hub_rank <= s.density_hub_popular_top_n:
             continue
 
@@ -111,19 +125,32 @@ def select_lowtraffic_anchors(nodes: list[dict], k: int) -> list[dict]:
             "dist_m": _parse_float(node.get("dist_m"), default=math.inf),
         })
 
+    if fallback_used > 0:
+        logger.info("비인기 앵커 fallback 조회: 시도 %d회 / 성공 %d회", fallback_used, fallback_hit)
+
     if not selected_candidates:
+        logger.info(
+            "비인기 앵커 후보 %d개 평가, 컷오프 통과 0개 → 앵커 미삽입", len(candidate_pool)
+        )
         return []
 
+    # hub_rank=None(hub 목록에 아예 없음)을 "가장 무명"으로 취급하도록 -inf를 부여한다.
+    # (구버전 -(hub_rank or 0)은 None이 0이 되어, 오히려 순위가 매겨진 후보보다 후순위로 밀리는 버그였음)
     selected_candidates.sort(
         key=lambda item: (
             item["avg_rate"],
-            -(item["hub_rank"] or 0),
+            -math.inf if item["hub_rank"] is None else -item["hub_rank"],
             item["dist_m"],
         )
     )
     selected = [item["node"] for item in selected_candidates[:k]]
     for node in selected:
         node["density_tier"] = "low_traffic"
+    logger.info(
+        "비인기 앵커 %d개 선택: %s",
+        len(selected),
+        ", ".join(node.get("name", "") for node in selected),
+    )
     return selected
 
 
@@ -165,6 +192,16 @@ def _filter_hub_rows(rows: list[dict], category: str | None) -> list[dict]:
     if not category:
         return rows
     return [row for row in rows if row.get("hubCtgryLclsNm") == category]
+
+
+def _rank_hub_rows(rows: list[dict]) -> list[dict]:
+    """hubRank(전역·카테고리 혼재 순위) 대신 필터링된 카테고리 안에서의 상대순위(_local_rank)를 매긴다.
+
+    원본 hubRank는 관광지+숙박이 섞인 순위라 그대로 top_n과 비교하면 호텔이 슬롯을 잠식한다.
+    원본 row(snapshot 캐시 공유 객체)는 변경하지 않고 얕은 복사본에 순위를 붙여 반환한다.
+    """
+    ranked = sorted(rows, key=lambda row: _rank_sort_value(row.get("hubRank")))
+    return [{**row, "_local_rank": i} for i, row in enumerate(ranked, start=1)]
 
 
 def _match_hub_row(node: dict, rows: list[dict]) -> dict | None:

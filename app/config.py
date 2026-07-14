@@ -105,8 +105,14 @@ class Settings(BaseSettings):
     density_region_code_map: dict[str, dict[str, str]] = {
         "종로": {"areaCd": "11", "signguCd": "11110"}
     }
-    density_hub_popular_top_n: int = 20       # hubRank <= N이면 중심 관광지로 보고 제외
+    # hubRank는 관광지+숙박이 섞인 전역 순위라 그대로 쓰면 top_n이 호텔에 잠식됨.
+    # → density.py에서 allowed_hub_category로 거른 뒤 카테고리 내 상대순위로 재계산해서 비교.
+    density_hub_popular_top_n: int = 20       # (카테고리 내 상대)순위 <= N이면 중심 관광지로 보고 제외
     density_allowed_hub_category: str = "관광지"
+    # 종로 실측(2026-07-13, 113개 장소 avg_cnctrRate 분포) p75. 근처 후보가 전부 혼잡해도
+    # 절대적으로 이 값을 넘으면 '비인기'로 인정하지 않음(상대순위만으로는 진짜 혼잡지도 뽑힐 수 있어서).
+    # median(63.1)은 최번화가(안국역 인근) 기준점에서 항상 0개가 나와 p75로 완화함.
+    density_lowtraffic_max_avg_rate: float = 70.9
 
     # BigData bulk fetch: numOfRows는 페이지당 row 수. 종로 실측 3390 rows → 1000이면 약 4페이지.
     density_cnctr_num_of_rows: int = 1000
