@@ -100,6 +100,36 @@ class Settings(BaseSettings):
     google_places_semaphore: int = 5      # 동시 priceLevel 조회 상한
     google_price_cache_ttl_s: int = 604800  # 7일 — 업소 가격대는 거의 안 바뀜(무료쿼터 절약)
 
+    # --- 비인기지역 앵커 선택 (TourAPI BigData 기반) ---
+    # MVP는 종로 고정. 지역 확장 시 density_region_code_map에 매핑 추가.
+    density_default_region: str = "종로"
+    density_region_code_map: dict[str, dict[str, str]] = {
+        "종로": {"areaCd": "11", "signguCd": "11110"}
+    }
+    # hubRank는 관광지+숙박이 섞인 전역 순위라 그대로 쓰면 top_n이 호텔에 잠식됨.
+    # → density.py에서 allowed_hub_category로 거른 뒤 카테고리 내 상대순위로 재계산해서 비교.
+    density_hub_popular_top_n: int = 20       # (카테고리 내 상대)순위 <= N이면 중심 관광지로 보고 제외
+    density_allowed_hub_category: str = "관광지"
+    # 종로 실측(2026-07-13, 113개 장소 avg_cnctrRate 분포) p75. 근처 후보가 전부 혼잡해도
+    # 절대적으로 이 값을 넘으면 '비인기'로 인정하지 않음(상대순위만으로는 진짜 혼잡지도 뽑힐 수 있어서).
+    # median(63.1)은 최번화가(안국역 인근) 기준점에서 항상 0개가 나와 p75로 완화함.
+    density_lowtraffic_max_avg_rate: float = 70.9
+
+    # BigData bulk fetch: numOfRows는 페이지당 row 수. 종로 실측 3390 rows → 1000이면 약 4페이지.
+    density_cnctr_num_of_rows: int = 1000
+    density_cnctr_max_pages: int = 20
+    density_hub_num_of_rows: int = 100
+    density_hub_max_pages: int = 20
+    density_hub_base_months_ago: int = 3
+
+    # Selection / fallback
+    density_candidate_limit: int = 20         # API/매칭 평가 대상 후보 수
+    density_targeted_fallback_limit: int = 3  # 벌크 매칭 실패 시 개별 tAtsNm 조회 허용 수
+    density_targeted_num_of_rows: int = 30    # 개별 tAtsNm 조회 page size
+
+    # Cache
+    density_bigdata_cache_ttl_s: int = 21600  # 6시간
+
     # --- 캐시 (대사·노드 상세) ---
     #  memory: 인프로세스(키 없이 구동) / redis: 공유 캐시(compose·배포)
     cache_backend: str = "memory"
