@@ -60,6 +60,7 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         region=req.region,
         with_dialogue=req.with_dialogue,
         with_content=req.with_content,
+        with_branching=req.with_branching,
     )
     scn = await generate_scenario(sreq)
     return ScenarioGenResponse(**scn)

@@ -77,6 +77,7 @@ class ScenarioGenRequest(BaseModel):
     region: str = "종로"
     with_dialogue: bool = True
     with_content: bool = True
+    with_branching: bool = False        # 갈림길(route 분기) 트리 생성(#24). 기본 off=선형
 
 
 class ScenarioGenResponse(BaseModel):
@@ -91,6 +92,8 @@ class ScenarioGenResponse(BaseModel):
     is_public: bool = False
     created_by: str | None = None
     budget: int | None = None
+    is_branching: bool = False          # 갈림길 포함 여부(선형이면 False)
+    route_tree: dict | None = None      # 분기 그래프(node_id→{next, choices}). 선형이면 None
 
 
 # --- 관광지 검색 (앵커 자동완성) ---

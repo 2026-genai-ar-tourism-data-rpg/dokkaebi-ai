@@ -22,6 +22,7 @@ from app.region.memory_cache import get_region_cache
 from app.scenario.density import density_label
 from app.scenario.node_content import assign_mission_type, generate_mission, to_quiz
 from app.scenario.request import ScenarioRequest
+from app.scenario.route_branching import attach_branch, pick_alternate, select_branch_point, validate_tree
 from app.scenario.route_builder import build_route
 from app.services.dialogue_service import run_dialogue
 from app.tourapi.client import TourAPIClient
@@ -81,6 +82,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
         with_dialogue=req.with_dialogue, with_content=req.with_content,
         end_x=end.lng if end else None, end_y=end.lat if end else None,
         wishlist=req.wishlist, budget=req.budget, no_meals=req.no_meals,
+        with_branching=req.with_branching,
     )
     # 입력 메타 부착(저장·검증용)
     scn["created_by"] = req.user_id
@@ -98,6 +100,7 @@ async def generate_basic_scenario(
     with_dialogue: bool = True, with_content: bool = True,
     end_x: float | None = None, end_y: float | None = None,
     wishlist: list | None = None, budget: int | None = None, no_meals: bool = False,
+    with_branching: bool = False,
 ) -> dict:
     """[거리순 v0] 가까운 N개 관광지로 '기억석 챕터' 생성 + 장소기반 NPC 대사.
 
@@ -165,6 +168,18 @@ async def generate_basic_scenario(
     ]
     finale_id = next((q["node_id"] for q in reversed(node_sequence) if q["is_finale"]),
                      route[-1]["node_id"])
+
+    # 6) [route 분기] 선형 → 트리(다이아몬드). 본선 위에 갈림길 1곳을 얹고 재합류(#24).
+    #    결정=eager(생성시 유계 트리 확정) · 근거 docs/route-branching.md. off면 선형 그대로.
+    is_branching = False
+    route_tree = None
+    if with_branching:
+        node_sequence, route_tree = await _apply_branching(
+            node_sequence, route, nodes, region,
+            with_dialogue=with_dialogue, with_content=with_content,
+        )
+        is_branching = route_tree is not None
+
     return {
         "scenario_id": _make_scenario_id(region, [q["node_id"] for q in node_sequence]),
         "title": f"{region}의 기억석 — {stone_total}조각 코스",
@@ -174,7 +189,48 @@ async def generate_basic_scenario(
         "stone_total": stone_total,               # 기억석 조각 총수(식음 제외)
         "anchor_node_id": finale_id,              # 피날레 = 마지막 관광 노드
         "is_public": False,
+        "is_branching": is_branching,             # 갈림길(route 분기) 포함 여부
+        "route_tree": route_tree,                 # 분기 그래프(선택→다음 노드). 선형이면 None
     }
+
+
+async def _apply_branching(
+    node_sequence: list[dict], route: list[dict], candidates: list[dict], region: str, *,
+    with_dialogue: bool, with_content: bool,
+) -> tuple[list[dict], dict | None]:
+    """본선 node_sequence에 갈림길 1곳을 얹어 다이아몬드 트리로 만든다(재합류).
+
+    ① 분기 노드 선택 → ② 예비 후보에서 샛길 노드 픽 → ③ 샛길 노드 콘텐츠(대사·미션) 생성
+    → ④ attach_branch로 트리 조립. 조건 미충족(짧은 경로·예비 없음)이면 (선형, None) 반환.
+    샛길 노드는 기억석 조각 수(stone_total)에 넣지 않음 — 본선 M의 '대안'이라서(MVP 결정).
+    """
+    bp_i = select_branch_point(node_sequence)
+    if bp_i is None:
+        logger.info("route 분기 skip: 분기 지점 없음(경로 짧음)")
+        return node_sequence, None
+    used = {q["node_id"] for q in node_sequence}
+    reserve = [n for n in candidates if n["node_id"] not in used and not _is_food(n)]
+    alt_src = pick_alternate(node_sequence, reserve, bp_i)
+    if alt_src is None:
+        logger.info("route 분기 skip: 샛길 예비 후보 없음")
+        return node_sequence, None
+
+    # 샛길 노드 콘텐츠 — 본선 M과 동급의 관광 노드로 취급(등장 대사 + 미션 1개)
+    alt_meta = {"is_food": False, "is_finale": False, "stone_no": None,
+                "stone_index": max(0, bp_i), "stone_total": 0}
+    alt_src["overview"] = await _overview_for(alt_src) or ""
+    get_region_cache().warm(region, {alt_src["node_id"]: alt_src["overview"]})
+    alt_dialogue = await _dialogue_for(alt_src, alt_meta) if with_dialogue else _fixed(alt_src, alt_meta)
+    alt_mission = await _content_for(alt_src, alt_meta) if with_content else None
+    alt_quest = _build_branch_quest(alt_src, len(node_sequence), region, alt_dialogue, alt_mission)
+
+    seq2, tree = attach_branch(node_sequence, bp_i, alt_quest)
+    try:
+        validate_tree(tree)                    # 무결성·수렴 방어 — 깨진 트리는 선형 폴백
+    except AssertionError as e:
+        logger.warning("route 분기 검증 실패 → 선형 폴백: %s", e)
+        return node_sequence, None
+    return seq2, tree
 
 
 async def _overview_for(node: dict) -> str | None:
@@ -281,6 +337,37 @@ def _build_food_quest(node: dict, order: int, dialogue: str) -> dict:
         "objective": None,
         "trigger_radius_m": 100,
         "fragment_id": None,                             # ★ 기억석 조각 아님
+        "npc_dialogue": dialogue,
+        "is_finale": False,
+    }
+
+
+def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
+                        mission: dict | None = None) -> dict:
+    """샛길(분기 대안) 관광 퀘스트. 본선 M의 대안이라 stone_no 없음·total에 안 잡힘.
+
+    관광 노드와 동일한 플레이(도착→대사→미션→조각) — 단 fragment는 분기 전용 id.
+    실제 방문 순서는 route_tree가 정의(order는 안정 인덱스일 뿐).
+    """
+    objective = quiz = None
+    if mission:
+        objective = {"order": mission.get("order", ""), "hints": mission.get("hints", [])}
+        quiz = to_quiz(mission)
+    return {
+        "order": order,
+        "node_id": node["node_id"],
+        "name": node.get("name"),
+        "kind": "spot",
+        "path_id": "b1",                                 # 샛길 갈래
+        "map_x": node.get("map_x"), "map_y": node.get("map_y"),
+        "dist_m": node.get("dist_m"),
+        "density_tier": node.get("density_tier"),
+        "mission": mission,
+        "quiz": quiz,
+        "objective": objective,
+        "trigger_radius_m": 100,
+        "stone_no": None,                                # 조각 번호 없음(본선 대안)
+        "fragment_id": f"{region}_branch_b1",
         "npc_dialogue": dialogue,
         "is_finale": False,
     }

@@ -43,3 +43,4 @@ class ScenarioRequest:
     # 나중 입력(자리만): visit_date · companions(혼자/친구) · difficulty
     with_dialogue: bool = True                     # NPC 대사 LLM 생성 여부(토큰)
     with_content: bool = True                      # 퀴즈·지령 생성 여부(토큰)
+    with_branching: bool = False                   # 선택 — 갈림길(route 분기) 트리 생성(#24)
