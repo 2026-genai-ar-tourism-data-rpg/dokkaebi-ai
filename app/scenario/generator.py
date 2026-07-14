@@ -86,7 +86,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
     scn["created_by"] = req.user_id
     scn["budget"] = req.budget
     scn["transport"] = req.transport
-    # wishlist 앵커 강제포함은 route_builder.build_route(① 단계, 이지선)가 처리. 여기선 메타만.
+    # wishlist 앵커 강제포함은 route_builder.build_route(① 단계, 정찬희)가 처리. 여기선 메타만.
     if req.wishlist:
         scn["wishlist_content_ids"] = [w.content_id for w in req.wishlist]
     return scn
@@ -113,8 +113,10 @@ async def generate_basic_scenario(
 
     # 1) 반경 내 관광지 거리순 fetch
     nodes = await _tour.location_based_list(map_x, map_y, radius_m, content_type_id=s.scenario_content_type_id)
-    if not nodes:
+    if not nodes and not wishlist:
         raise DokkaebiAIError(f"반경 {radius_m}m 내 관광지 없음 (좌표 {map_x},{map_y})")
+    if not nodes:
+        logger.warning("반경 내 후보 없음 → 위시 앵커만으로 경로 구성")
     # 1.5) 노드 선택/배열 seam — 앵커 강제포함 + 거리순 채우기 + 피날레 + 식음 삽입
     route = build_route(
         nodes, count=count, start_x=map_x, start_y=map_y, end_x=end_x, end_y=end_y,

@@ -78,7 +78,7 @@ def _select_count(nodes: list[dict], anchors: list[dict], count: int) -> list[di
     """앵커를 먼저 확보하고 남은 슬롯을 가까운 후보(nodes는 이미 거리순)로 채워 count개 선택.
 
     선택만 담당 — 최종 방문 순서는 _order_route가 정한다(NN 동선).
-    앵커가 count를 넘으면 앵커 우선으로 count개까지만.
+    앵커가 count를 넘어도 전부 보존한다(결정 C) — 거리 채움만 count 도달 시 중단.
     """
     selected: list[dict] = list(anchors)
     seen = {a["node_id"] for a in selected}
@@ -88,7 +88,7 @@ def _select_count(nodes: list[dict], anchors: list[dict], count: int) -> list[di
         if n["node_id"] not in seen:
             selected.append(n)
             seen.add(n["node_id"])
-    return selected[:count]
+    return selected
 
 
 def _path_len(seq: list[dict], start_x: float, start_y: float) -> float:
