@@ -10,6 +10,13 @@
 #               (generator 빈노드 가드 · route_builder 캡은 경계 밖).
 # 구현일: 2026-06-30 | 작성: 정찬희 (wishlist-anchor/jch/v1) · seam STUB 최초: kys (route-seam/kys/v1)
 # 관련: 기획 11-3 앵커+샛길 · request.py WishItem · route_builder.build_route
+# ------------------------------------------------------------
+# [v2] 결정 B/C 구현 — 경계(generator·route_builder) 쪽 반영.
+# 구현(요약): generator.generate_basic_scenario의 `if not nodes: raise`를
+#            `if not nodes and not wishlist: raise`로 완화(B) + route_builder._select_count의
+#            `selected[:count]` 캡 제거로 앵커 전부 보존(C). 이 hook 자체는 변경 없음
+#            (처음부터 캡 없이 B/C를 반환했음) — 경계 쪽 가드/캡만 따라잡음.
+# 구현일: 2026-07-14 | 작성: 정찬희 (radius-edge/jch/v1)
 # ============================================================
 from app.core.logger import get_logger
 
@@ -92,13 +99,13 @@ def select_wishlist_anchors(nodes: list[dict], wishlist: list) -> list[dict]:
       - 앵커 수에 상한(cap)을 두지 않는다(결정 C: count 초과 허용).
       - nodes가 비고 위시만 있으면 전부 합성 앵커로 반환한다(결정 B).
 
-    NOTE(통합 — PR 전 팀 합의 / generator·route_builder는 경계상 수정 금지):
+    NOTE(통합 — radius-edge/jch/v1에서 구현 완료, dev PR 대상):
       · 결정 B(반경 내 후보 0개 + 위시 → 위시만): 이 hook은 nodes=[]에서 합성 앵커를
-        정상 반환하나, generator.generate_basic_scenario가 ``if not nodes: raise``로
-        build_route 호출 전에 막는다 → generator 가드 완화(kys) 없이는 결정 B 미실현.
-      · 결정 C(앵커 수 > count → 전부): 이 hook은 캡 없이 전부 반환하나,
-        route_builder._fill_distance가 ``selected[:count]``로 잘라낸다 → seam 조정(kys)
-        없이는 결정 C 미실현.
+        정상 반환하고, generator.generate_basic_scenario도 ``if not nodes and not wishlist:``
+        로 가드를 완화해 build_route까지 통과시킨다 → 결정 B 실현.
+      · 결정 C(앵커 수 > count → 전부): 이 hook은 캡 없이 전부 반환하고,
+        route_builder._select_count도 ``return selected``(캡 제거)로 앵커를 전부 보존한다
+        → 결정 C 실현.
 
     Args:
         nodes: 거리순 정렬된 후보 노드 dict 리스트. 매칭 키는 ``tour_content_id``.
