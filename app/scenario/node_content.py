@@ -5,6 +5,13 @@
 #            타입별 프롬프트로 grounding 콘텐츠 생성. 모든 미션에 지령(order)+단계힌트.
 #            앱 호환: 질문형(QUIZ/DIALOGUE)은 quiz로도 매핑. 아키텍처 3-5 · 시나리오_MVP_예시.
 # 구현일: 2026-06-19 | 작성: kys (node-content/kys/v1)
+# ------------------------------------------------------------
+# [v2] 동기 분류(LLM 1차 · 휴리스틱 폴백) 추가 — #30 노드 스키마 생성층
+# 구현(요약): classify_motivations() 신설 — overview를 읽고 닫힌 어휘(M1~M9)만
+#            반환하는 grounding 분류. 실패/mock/비JSON이면 호출측 폴백 사용(테스트 결정성).
+#            assign_mission_type은 하위호환 보존 — 신규 경로는 node_schema.select_mission_type
+#            (동기→허용 전략→미션 타입, 미션 텍스트↔액션 모순 차단).
+# 구현일: 2026-07-30 | 작성: pjh (node-schema-gen/pjh/v1)
 # ============================================================
 import json
 
@@ -23,7 +30,50 @@ MISSION_CYCLE = [
 
 
 def assign_mission_type(index: int, is_finale: bool) -> str:
+    """(하위호환) 동기 무관 순환 배정 — 신규 경로는 node_schema.select_mission_type 사용.
+
+    v3: 이 함수는 동기 제약을 모르므로 미션 텍스트↔전략 모순을 만들 수 있다.
+    generator는 select_mission_type(동기 → 허용 전략 → 미션 타입)을 쓴다.
+    """
     return "DIALOGUE_COLLECT" if is_finale else MISSION_CYCLE[index % len(MISSION_CYCLE)]
+
+
+# ── 동기 분류(LLM 1차 · 휴리스틱 폴백) — 시나리오구조화 4절 grounding 원칙 ──
+# overview(열린 세계 텍스트)를 읽는 판단은 LLM 층의 일이고, 출력은 닫힌 어휘(M1~M9)라
+# 코드가 검증·리롤한다. 실패·미구성(mock)·비JSON이면 호출측이 준 휴리스틱 폴백을 쓴다.
+
+_MOTIVATION_CODES = frozenset(f"M{i}" for i in range(1, 10))
+
+_CLASSIFY_PROMPT = (
+    "너는 관광지 설명을 읽고 퀘스트 동기 코드를 1~2개 고르는 분류기다.\n"
+    "코드: M1 기억의 수호(역사·이야기가 잊힘) / M2 터 지킴(**현재 진행형** 위협·훼손) / "
+    "M3 이름 회복(인물의 명예·업적) / M4 평온 회복(자연·소란 진정) / M5 요괴 소탕 / "
+    "M6 살림 불림(시장·상권·소비) / M7 재주 시험(퀴즈·눈썰미) / "
+    "M8 물건 되찾기(**현재** 분실물) / M9 위로·전언(인물의 부탁·미련)\n"
+    "주의: 과거에 파괴·소실됐다가 복원·중건된 역사 서술은 M2/M8이 아니라 M1/M3이다.\n"
+    "[장소] {name}\n[설명] {overview}\n"
+    '다른 말 없이 아래 JSON만 출력: {{"motivations":["M?","M?"]}}'
+)
+
+
+async def classify_motivations(name: str, overview: str, fallback: list[str]) -> list[str]:
+    """overview 기반 동기 분류. 출력은 항상 검증된 M코드 1~2개(실패 시 fallback)."""
+    if not (overview or "").strip():
+        return fallback
+    prompt = _CLASSIFY_PROMPT.format(name=name or "이곳", overview=overview[:1200])
+    try:
+        raw = await _llm.generate(prompt)
+        data = _json(raw) or {}
+    except Exception as e:
+        logger.warning("동기 분류 실패(%s): %s → 휴리스틱 폴백", name, e)
+        return fallback
+    codes = [
+        c.strip().upper()
+        for c in (data.get("motivations") or [])
+        if isinstance(c, str) and c.strip().upper() in _MOTIVATION_CODES
+    ]
+    codes = list(dict.fromkeys(codes))[:2]
+    return codes or fallback
 
 
 _BASE = "너는 '{name}'을(를) 지키는 도깨비다. 도깨비 말투(~니라/허허). 아래 [장소 정보]에 근거해서만, 없는 사실은 지어내지 마라.\n[장소 정보] {overview}\n"
