@@ -11,24 +11,35 @@
 #            _plan_nodes가 노드별 역할(조각 번호·피날레·식음) 메타 부여 → 대사/미션/조립이 이를 사용.
 #            식음노드 = 경유/보상 퀘스트(대사 O, 기억석 미션·fragment_id X).
 # 구현일: 2026-07-05 | 작성: kys+pjh (quest-foodnode/kys-pjh/v1)
+# ------------------------------------------------------------
+# [v3] 노드 스키마 생성층 배선 — 동기를 미션 생성 '이전'에 확정 (#30 리뷰 반영)
+# 구현(요약): _motivations_for(LLM 분류→휴리스틱 폴백, 피날레 M3 고정) →
+#            select_mission_type(동기가 허용하는 전략의 미션만 순환) → 콘텐츠 생성.
+#            미션 텍스트↔액션 시퀀스 모순 차단. run_qa 배선(_run_qa_log, 경고 로그).
+#            샛길(분기) 노드도 동일 순서 적용. enrich_quest에 motivations 전달.
+# 구현일: 2026-07-30 | 작성: pjh (node-schema-gen/pjh/v1)
 # ============================================================
 import asyncio
 import hashlib
-
 from app.config import get_settings
 from app.core.exceptions import DokkaebiAIError
 from app.core.logger import get_logger
 from app.region.memory_cache import get_region_cache
 from app.scenario.density import density_label
-from app.scenario.node_content import assign_mission_type, generate_mission, to_quiz
+from app.scenario.node_content import classify_motivations, generate_mission, to_quiz
+from app.scenario.node_schema import (
+    enrich_quest,
+    infer_motivations,
+    link_state_graph,
+    run_qa,
+    select_mission_type,
+)
 from app.scenario.request import ScenarioRequest
 from app.scenario.route_branching import attach_branch, pick_alternate, select_branch_point, validate_tree
 from app.scenario.route_builder import build_route
 from app.services.dialogue_service import run_dialogue
 from app.tourapi.client import TourAPIClient
-
 logger = get_logger(__name__)
-
 # 핫패스 공용 TourAPI 클라이언트 (키 없으면 mock)
 _tour = TourAPIClient()
 
@@ -36,7 +47,6 @@ _tour = TourAPIClient()
 _FIXED = "{name}에 깃든 기억의 조각이 어딘가 숨었느니라. 눈을 크게 뜨고 찾아보거라."
 _FIXED_FINALE = "오호, 마지막 조각이로다! {name}에서 흩어진 기억을 모두 모아 복원하거라!"
 _FIXED_FOOD = "{name}에서 잠시 요기를 하고 가거라. 배가 든든해야 기억도 잘 떠오르는 법이지."
-
 # 식음 삽입 노드(정찬희 hook)의 마커 — 기억석 조각이 아님(경유/보상 노드)
 _FOOD_KINDS = ("food", "cafe")
 
@@ -48,7 +58,6 @@ def _is_food(node: dict) -> bool:
 
 def _plan_nodes(route: list[dict]) -> list[dict]:
     """route 각 노드에 역할 메타 부여 — 조각 번호/피날레는 '관광 노드'만 기준.
-
     반환[i] = {is_food, is_finale, stone_no(1-base|None), stone_index(0-base|None), stone_total}.
     식음노드는 조각 번호 없음(None) → fragment_id 안 붙고 total에도 안 잡힘.
     피날레 = 마지막 '관광' 노드(식음이 뒤에 붙어도 관광 노드가 피날레).
@@ -68,10 +77,8 @@ def _plan_nodes(route: list[dict]) -> list[dict]:
                           "stone_total": stone_total})
     return metas
 
-
 async def generate_scenario(req: ScenarioRequest) -> dict:
     """[입력 contract] 사용자 입력(ScenarioRequest) → 시나리오. 서버가 호출하는 진입점.
-
     transport→반경 자동, end(집)→피날레, wishlist→앵커(생성로직은 추후). 좌표는 앱이 해석해 넘김.
     """
     s = get_settings()
@@ -93,7 +100,6 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
         scn["wishlist_content_ids"] = [w.content_id for w in req.wishlist]
     return scn
 
-
 async def generate_basic_scenario(
     map_x: float, map_y: float, *, region: str = "종로",
     radius_m: int | None = None, count: int | None = None,
@@ -103,7 +109,6 @@ async def generate_basic_scenario(
     with_branching: bool = False,
 ) -> dict:
     """[거리순 v0] 가까운 N개 관광지로 '기억석 챕터' 생성 + 장소기반 NPC 대사.
-
     map_x=경도, map_y=위도. end_x/y 주면 끝점에 가장 가까운 노드를 피날레로.
     with_dialogue=True면 각 노드 LLM 대사(그래프) 생성.
     노드 선택/배열(앵커·비인기·식음)은 route_builder.build_route로 분리 — hook별 오너:
@@ -113,7 +118,6 @@ async def generate_basic_scenario(
     s = get_settings()
     radius_m = radius_m or s.scenario_default_radius_m
     count = count or s.scenario_node_count
-
     # 1) 반경 내 관광지 거리순 fetch
     nodes = await _tour.location_based_list(map_x, map_y, radius_m, content_type_id=s.scenario_content_type_id)
     if not nodes and not wishlist:
@@ -129,7 +133,6 @@ async def generate_basic_scenario(
     # 노드 역할 메타(조각 번호·피날레·식음 분리). total은 '관광 노드'만 셈.
     metas = _plan_nodes(route)
     stone_total = metas[0]["stone_total"] if metas else 0
-
     # 2) 각 노드 overview 보강 (mock=내장 / 실데이터=detailCommon2 병렬)
     overviews = await asyncio.gather(*[_overview_for(n) for n in route])
     for n, ov in zip(route, overviews):
@@ -137,38 +140,39 @@ async def generate_basic_scenario(
 
     # 3) 지역 인메모리 캐시 워밍 → 대화 그래프 context_load가 이 텍스트를 grounding으로 사용
     get_region_cache().warm(region, {n["node_id"]: n["overview"] for n in route})
-
     # 4) 장소기반 NPC 대사 생성 (그래프 재사용, 병렬). 실패/비활성 시 고정 대사
     if with_dialogue:
         dialogues = await asyncio.gather(*[_dialogue_for(n, m) for n, m in zip(route, metas)])
     else:
         dialogues = [_fixed(n, m) for n, m in zip(route, metas)]
-
     # 4.5) 고정 콘텐츠(생성 시 1회): 비인기 라벨(mock) + 퀴즈·지령(LLM, grounding). 아키텍처 3-5
     for n, m in zip(route, metas):
         if not m["is_food"]:                  # 식음노드는 비인기 라벨 대상 아님
             n["density_tier"] = density_label(n)  # mock — 실데이터는 빅데이터 task
-    # 노드마다 미션 타입을 다양화(P1-P6 카탈로그): 순환 배정 + 피날레=복원. 식음노드는 미션 없음(None)
+    # 4.6) [v3 #30] 동기 분류 — 미션 생성 **이전**에 확정한다(동기→허용 전략→미션 타입).
+    #      LLM(grounding) 1차 + 휴리스틱 폴백. 미션 텍스트와 액션 시퀀스의 모순 차단 지점.
+    motivations_list = await asyncio.gather(
+        *[_motivations_for(n, m) for n, m in zip(route, metas)]
+    )
+    # 노드마다 미션 타입을 다양화: 동기가 허용하는 전략의 미션만 순환 배정. 식음노드는 미션 없음(None)
     if with_content:
         missions = await asyncio.gather(
-            *[_content_for(n, m) for n, m in zip(route, metas)]
+            *[_content_for(n, m, mv) for n, m, mv in zip(route, metas, motivations_list)]
         )
     else:
         missions = [None] * len(route)
-
     logger.info("거리순 시나리오: 후보 %d → 관광 %d조각 + 식음 %d (반경 %dm, 대사=%s, 미션=%s)",
                 len(nodes), stone_total, len(route) - stone_total, radius_m,
                 "LLM" if with_dialogue else "고정",
                 "/".join(m["type"] for m in missions if m) if with_content else "OFF")
-
     # 5) 퀘스트 조립 — order=방문 순서(식음 포함), fragment는 관광 노드만
     node_sequence = [
-        _build_quest(n, i, metas[i], region, dialogues[i], mission=missions[i])
+        _build_quest(n, i, metas[i], region, dialogues[i],
+                     mission=missions[i], motivations=motivations_list[i])
         for i, n in enumerate(route)
     ]
     finale_id = next((q["node_id"] for q in reversed(node_sequence) if q["is_finale"]),
                      route[-1]["node_id"])
-
     # 6) [route 분기] 선형 → 트리(다이아몬드). 본선 위에 갈림길 1곳을 얹고 재합류(#24).
     #    결정=eager(생성시 유계 트리 확정) · 근거 docs/route-branching.md. off면 선형 그대로.
     is_branching = False
@@ -179,7 +183,7 @@ async def generate_basic_scenario(
             with_dialogue=with_dialogue, with_content=with_content,
         )
         is_branching = route_tree is not None
-
+    node_sequence = link_state_graph(node_sequence)
     return {
         "scenario_id": _make_scenario_id(region, [q["node_id"] for q in node_sequence]),
         "title": f"{region}의 기억석 — {stone_total}조각 코스",
@@ -193,13 +197,11 @@ async def generate_basic_scenario(
         "route_tree": route_tree,                 # 분기 그래프(선택→다음 노드). 선형이면 None
     }
 
-
 async def _apply_branching(
     node_sequence: list[dict], route: list[dict], candidates: list[dict], region: str, *,
     with_dialogue: bool, with_content: bool,
 ) -> tuple[list[dict], dict | None]:
     """본선 node_sequence에 갈림길 1곳을 얹어 다이아몬드 트리로 만든다(재합류).
-
     ① 분기 노드 선택 → ② 예비 후보에서 샛길 노드 픽 → ③ 샛길 노드 콘텐츠(대사·미션) 생성
     → ④ attach_branch로 트리 조립. 조건 미충족(짧은 경로·예비 없음)이면 (선형, None) 반환.
     샛길 노드는 기억석 조각 수(stone_total)에 넣지 않음 — 본선 M의 '대안'이라서(MVP 결정).
@@ -214,16 +216,16 @@ async def _apply_branching(
     if alt_src is None:
         logger.info("route 분기 skip: 샛길 예비 후보 없음")
         return node_sequence, None
-
     # 샛길 노드 콘텐츠 — 본선 M과 동급의 관광 노드로 취급(등장 대사 + 미션 1개)
     alt_meta = {"is_food": False, "is_finale": False, "stone_no": None,
                 "stone_index": max(0, bp_i), "stone_total": 0}
     alt_src["overview"] = await _overview_for(alt_src) or ""
     get_region_cache().warm(region, {alt_src["node_id"]: alt_src["overview"]})
     alt_dialogue = await _dialogue_for(alt_src, alt_meta) if with_dialogue else _fixed(alt_src, alt_meta)
-    alt_mission = await _content_for(alt_src, alt_meta) if with_content else None
-    alt_quest = _build_branch_quest(alt_src, len(node_sequence), region, alt_dialogue, alt_mission)
-
+    alt_motivations = await _motivations_for(alt_src, alt_meta)   # [v3] 동기 → 미션 타입 순서 유지
+    alt_mission = await _content_for(alt_src, alt_meta, alt_motivations) if with_content else None
+    alt_quest = _build_branch_quest(alt_src, len(node_sequence), region, alt_dialogue,
+                                    alt_mission, motivations=alt_motivations)
     seq2, tree = attach_branch(node_sequence, bp_i, alt_quest)
     try:
         validate_tree(tree)                    # 무결성·수렴 방어 — 깨진 트리는 선형 폴백
@@ -235,7 +237,6 @@ async def _apply_branching(
 
 async def _overview_for(node: dict) -> str | None:
     """노드 overview 확보: mock은 내장값, 실데이터는 detailCommon2 호출.
-
     한 노드 상세 조회가 실패(TourAPI 일시오류·제한)해도 시나리오 전체를 막지 않음 →
     None 반환(그 노드는 grounding 없이 이름만). 담당: 배선 = 정찬희.
     """
@@ -248,7 +249,6 @@ async def _overview_for(node: dict) -> str | None:
         logger.warning("노드 %s overview 조회 실패: %s", node.get("node_id"), e)
         return None
 
-
 async def _dialogue_for(node: dict, meta: dict) -> str:
     """대화 그래프로 장소기반 대사 생성. 식음=요기 권유, 관광=등장/완료. 실패 시 고정 대사 폴백."""
     stage = "식음" if meta["is_food"] else ("완료" if meta["is_finale"] else "등장")
@@ -259,7 +259,6 @@ async def _dialogue_for(node: dict, meta: dict) -> str:
         logger.warning("노드 %s 대사 생성 실패 → 고정 대사: %s", node.get("node_id"), e)
         return _fixed(node, meta)
 
-
 def _fixed(node: dict, meta: dict) -> str:
     """폴백 고정 대사. 식음노드는 요기 권유, 그 외는 조각/피날레 대사."""
     if meta["is_food"]:
@@ -269,15 +268,31 @@ def _fixed(node: dict, meta: dict) -> str:
     return tmpl.format(name=node.get("name", "이곳"))
 
 
-async def _content_for(node: dict, meta: dict) -> dict | None:
-    """관광 노드 미션 생성(타입별 다양화). 식음노드는 기억석 미션 없음(None).
+async def _motivations_for(node: dict, meta: dict) -> list[str]:
+    """[v3 #30] 노드 동기 결정 — LLM 분류(grounding) → 실패/미구성 시 휴리스틱 폴백.
+    피날레는 명세 6절 정답지의 M3을 항상 앞에 고정한다(LLM이 떨어뜨려도 유지).
+    """
+    fallback = infer_motivations(node, is_food=meta["is_food"], is_finale=meta["is_finale"])
+    if meta["is_food"]:
+        return fallback                    # 식음 = M6 고정, LLM 분류 불필요
+    codes = await classify_motivations(node.get("name") or "", node.get("overview") or "", fallback)
+    if meta["is_finale"] and "M3" not in codes:
+        codes = ["M3", *codes]
+    return list(dict.fromkeys(codes))[:2]
 
-    실패해도 시나리오 안 막음(폴백 보장). 미션 타입 순환은 '조각 순서'(stone_index) 기준.
+
+async def _content_for(node: dict, meta: dict, motivations: list[str]) -> dict | None:
+    """관광 노드 미션 생성(타입별 다양화). 식음노드는 기억석 미션 없음(None).
+    실패해도 시나리오 안 막음(폴백 보장).
+    [v3 #30] 미션 타입은 동기가 허용하는 전략의 것만 순환 — 텍스트↔액션 정합 보장.
     """
     if meta["is_food"]:
         return None                        # 식음노드 = 경유/보상, 기억석 미션 아님
     name, overview = node.get("name") or "이곳", node.get("overview") or ""
-    mtype = assign_mission_type(meta["stone_index"], is_finale=meta["is_finale"])
+    mtype = select_mission_type(
+        motivations, meta["stone_index"] or 0,
+        is_finale=meta["is_finale"], is_food=False,
+    )
     try:
         return await generate_mission(name, overview, mtype)
     except Exception as e:
@@ -285,9 +300,17 @@ async def _content_for(node: dict, meta: dict) -> dict | None:
         return {"type": mtype, "order": f"{name} 주변을 살펴 기억석 조각을 찾아라.",
                 "hints": ["주변을 둘러보거라."]}
 
+def _run_qa_log(quest: dict, node: dict) -> None:
+    """[v3 #30] QA 배선 — 게이트가 아니라 경고 로그(휴리스틱). DTO에는 넣지 않는다."""
+    qa = run_qa(quest, node)
+    flags = {k: qa[k] for k in ("answer_leak", "tone_ok", "hallucination_flag", "contract_ok")}
+    if qa["answer_leak"] or not qa["tone_ok"] or qa["hallucination_flag"] or not qa["contract_ok"]:
+        logger.warning("QA 플래그 %s(%s): %s unsupported=%s",
+                       node.get("node_id"), quest.get("name"), flags, qa["unsupported_tokens"])
+
 
 def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
-                 mission: dict | None = None) -> dict:
+                 mission: dict | None = None, motivations: list | None = None) -> dict:
     """노드 1개 → 퀘스트 1개. order=방문 순서(식음 포함). 식음노드는 경유/보상 퀘스트로 분기.
 
     관광 노드: 도착→NPC대사→미션(타입별)→기억석 조각1→다음, 마지막=피날레(fragment_id 부여).
@@ -295,13 +318,12 @@ def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
     """
     if meta["is_food"]:
         return _build_food_quest(node, order, dialogue)
-
     objective = None
     quiz = None
     if mission:
         objective = {"order": mission.get("order", ""), "hints": mission.get("hints", [])}
         quiz = to_quiz(mission)
-    return {
+    quest = {
         "order": order,
         "node_id": node["node_id"],
         "name": node.get("name"),
@@ -318,11 +340,13 @@ def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
         "npc_dialogue": dialogue,
         "is_finale": meta["is_finale"],
     }
-
+    enriched = enrich_quest(quest, node, motivations=motivations)
+    _run_qa_log(enriched, node)
+    return enriched
 
 def _build_food_quest(node: dict, order: int, dialogue: str) -> dict:
     """식음(카페·식당) 경유 퀘스트. 기억석 아님 — fragment_id/미션 없음, 쿠폰·가격밴드만."""
-    return {
+    quest = {
         "order": order,
         "node_id": node["node_id"],
         "name": node.get("name"),
@@ -340,12 +364,11 @@ def _build_food_quest(node: dict, order: int, dialogue: str) -> dict:
         "npc_dialogue": dialogue,
         "is_finale": False,
     }
-
+    return enrich_quest(quest, node)
 
 def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
-                        mission: dict | None = None) -> dict:
+                        mission: dict | None = None, motivations: list | None = None) -> dict:
     """샛길(분기 대안) 관광 퀘스트. 본선 M의 대안이라 stone_no 없음·total에 안 잡힘.
-
     관광 노드와 동일한 플레이(도착→대사→미션→조각) — 단 fragment는 분기 전용 id.
     실제 방문 순서는 route_tree가 정의(order는 안정 인덱스일 뿐).
     """
@@ -353,7 +376,7 @@ def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
     if mission:
         objective = {"order": mission.get("order", ""), "hints": mission.get("hints", [])}
         quiz = to_quiz(mission)
-    return {
+    quest = {
         "order": order,
         "node_id": node["node_id"],
         "name": node.get("name"),
@@ -371,7 +394,9 @@ def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
         "npc_dialogue": dialogue,
         "is_finale": False,
     }
-
+    enriched = enrich_quest(quest, node, motivations=motivations)
+    _run_qa_log(enriched, node)
+    return enriched
 
 def _make_scenario_id(region: str, node_ids: list[str]) -> str:
     """노드 구성으로 결정적 시나리오 ID(같은 구성=같은 ID → 재사용 키 기반)."""
