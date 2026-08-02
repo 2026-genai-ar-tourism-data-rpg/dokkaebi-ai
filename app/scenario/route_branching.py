@@ -69,6 +69,9 @@ def attach_branch(
     alt = dict(alt_quest)
     alt["path_id"] = BRANCH_ID
     alt.setdefault("order", len(seq))
+    # 샛길 A는 본선 M을 '건너뛰는' 대안이다 → 어느 노드를 대체하는지 명시(#38).
+    # link_state_graph가 이걸 보고 M의 조각·단서를 A에 승계시켜 두 갈래를 등가로 만든다.
+    alt["substitutes"] = m["node_id"]
 
     prompt = prompt or "갈림길이로다. 어느 길로 가려느냐?"
     main_label = main_label or f"본래 길 — 「{m.get('name', '앞')}」 쪽으로 간다"

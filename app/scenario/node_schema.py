@@ -738,6 +738,8 @@ def link_state_graph(node_sequence: list[dict[str, Any]]) -> list[dict[str, Any]
             if isinstance(action, dict) and action.get("a") == "combine":
                 action["items"] = fragment_refs
 
+    _inherit_substituted_state(sequence)
+
     for node in sequence:
         if _is_food(node):
             node["grants"] = []
@@ -748,6 +750,38 @@ def link_state_graph(node_sequence: list[dict[str, Any]]) -> list[dict[str, Any]
         validate_app_contract(node)
 
     return sequence
+
+
+def _inherit_substituted_state(sequence: list[dict[str, Any]]) -> None:
+    """샛길(b1)이 대체하는 본선 노드 M의 조각·단서를 승계시킨다(제자리 수정).
+
+    분기는 BP → {M, A} → R 다이아몬드라 샛길 A를 타면 본선 M을 아예 방문하지 않는다.
+    그런데 단서 체인·피날레 requires는 본선(main) 기준으로 만들어지므로, 승계가 없으면
+    M의 fragment/clue를 아무도 지급하지 않아 피날레 hard requires가 영영 안 열린다
+    (= 샛길 선택 시 완주 불가, 이슈 #38). A가 M의 상태를 그대로 물려받아 갈래 간 등가를 보장한다.
+
+    승계 대상: stone_no · fragment_id · clue · requires(진입 관문) · grants의 fragment/clue.
+    A 고유의 그 외 grants(flag·affinity 등)와 콘텐츠(이름·미션·NPC)는 그대로 둔다.
+    """
+    by_id = {node.get("node_id"): node for node in sequence}
+    for node in sequence:
+        origin = by_id.get(node.get("substitutes"))
+        if origin is None:
+            continue
+        own = [
+            state for state in _string_list(node.get("grants"))
+            if not state.startswith(("fragment:", "clue:"))
+        ]
+        inherited = [
+            state for state in _string_list(origin.get("grants"))
+            if state.startswith(("fragment:", "clue:"))
+        ]
+        node["grants"] = _unique(inherited + own)
+        node["stone_no"] = origin.get("stone_no")
+        node["fragment_id"] = origin.get("fragment_id")
+        node["clue"] = origin.get("clue")
+        node["requires"] = _string_list(origin.get("requires"))
+        node["requires_mode"] = str(origin.get("requires_mode") or "none")
 
 
 # ── 계약 검증 · QA ───────────────────────────────────────────────────
