@@ -1,0 +1,22 @@
+{
+  "node_id": "tour_unhyeongung",
+  "order": 0,
+  "name": "운현궁",
+  "kind": "spot",
+  "fragment_id": "글씨조각1",
+  "npc_dialogue": "이 땅의 흔적을 살펴보거라, 허허.",
+  "is_finale": false,
+  "mission": {
+    "type": "PHOTO_FIND",
+    "order": "대문과 처마를 촬영하고 흔적을 따라가거라.",
+    "hints": ["해 지는 쪽을 살펴보거라.", "처마 아래를 보거라."],
+    "photo_targets": ["대문", "마당", "전통건물 외관"],
+    "find": "글씨파편"
+  },
+  "quiz": {
+    "q": "운현궁과 관련된 인물을 고르거라.",
+    "options": ["세종대왕", "흥선대원군", "이순신"],
+    "answer": 1,
+    "wrong_hint": "조선 후기 왕의 아버지를 떠올려 보거라."
+  }
+}

@@ -54,12 +54,13 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         end=LatLng(lat=req.end.lat, lng=req.end.lng) if req.end else None,
         radius_m=req.radius_m,
         transport=req.transport,
-        wishlist=[WishItem(content_id=w.content_id, lat=w.lat, lng=w.lng, kind=w.kind) for w in req.wishlist],
+        wishlist=[WishItem(content_id=w.content_id, name=w.name, lat=w.lat, lng=w.lng, kind=w.kind) for w in req.wishlist],
         budget=req.budget,
         no_meals=req.no_meals,
         region=req.region,
         with_dialogue=req.with_dialogue,
         with_content=req.with_content,
+        with_branching=req.with_branching,
     )
     scn = await generate_scenario(sreq)
     return ScenarioGenResponse(**scn)

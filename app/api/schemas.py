@@ -58,6 +58,7 @@ class LatLngSchema(BaseModel):
 class WishItemSchema(BaseModel):
     """위시리스트 항목 — searchKeyword2 자동완성에서 확정된 content_id."""
     content_id: str
+    name: str | None = None                              # 표시용(합성 앵커 이름)
     lat: float | None = None
     lng: float | None = None
     kind: str = "attraction"
@@ -76,6 +77,7 @@ class ScenarioGenRequest(BaseModel):
     region: str = "종로"
     with_dialogue: bool = True
     with_content: bool = True
+    with_branching: bool = False        # 갈림길(route 분기) 트리 생성(#24). 기본 off=선형
 
 
 class ScenarioGenResponse(BaseModel):
@@ -85,10 +87,15 @@ class ScenarioGenResponse(BaseModel):
     region: str
     type: str = "custom"
     node_sequence: list[dict]
+    stone_total: int | None = None      # 기억석 조각 총수(식음 노드 제외)
     anchor_node_id: str | None = None
     is_public: bool = False
     created_by: str | None = None
     budget: int | None = None
+    transport: str = "walk"             # 요청 이동수단(반경 산출 근거) — 저장·검증용
+    wishlist_content_ids: list[str] = Field(default_factory=list)  # 위시 앵커 content_id(앱 표시용)
+    is_branching: bool = False          # 갈림길 포함 여부(선형이면 False)
+    route_tree: dict | None = None      # 분기 그래프(node_id→{next, choices}). 선형이면 None
 
 
 # --- 관광지 검색 (앵커 자동완성) ---
