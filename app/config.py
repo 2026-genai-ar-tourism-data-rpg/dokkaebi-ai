@@ -59,8 +59,10 @@ class Settings(BaseSettings):
     # --- TourAPI (국문관광정보 — 노드 데이터 원천) ---
     #  service_key 없으면 mock 종로 노드로 구동(거리순 로직 검증)
     #  ⚠️ 오퍼레이션 버전(KorService1/2)은 키 발급 후 Swagger로 확정
-    tourapi_base_url: str = "http://apis.data.go.kr/B551011/KorService2"  # 노드 데이터(좌표·설명)
-    tourapi_data_base_url: str = "http://apis.data.go.kr/B551011"          # 빅데이터 계열 루트(연관·집중률·중심·방문자수)
+    #  ⚠️ 반드시 https — 평문 http는 응답 없이 타임아웃된다(2026-08 실측: http 25s 무응답 /
+    #     https 0.17s 200). 장애로 오인하기 쉬우니 프로토콜을 바꾸지 말 것.
+    tourapi_base_url: str = "https://apis.data.go.kr/B551011/KorService2"  # 노드 데이터(좌표·설명)
+    tourapi_data_base_url: str = "https://apis.data.go.kr/B551011"         # 빅데이터 계열 루트(연관·집중률·중심·방문자수)
     tourapi_service_key: str = ""
     tourapi_mobile_os: str = "ETC"
     tourapi_mobile_app: str = "dokkaebi"
