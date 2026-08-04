@@ -298,3 +298,77 @@ def interleave_food(route: list[dict], *, budget: int | None = None,
                 len(picked), BAND_LABEL.get(target_band), max(1, headcount), budget,
                 [f"{n['name']}({n.get('price_band_label')})" for _, n in picked])
     return new_route
+
+async def nearby_food_async(map_x: float, map_y: float, budget: int | None = None,
+                            limit: int = 10, radius_m: int | None = None) -> list[dict]:
+    """async generator용 후보 조회. 실행 중인 이벤트 루프를 동기 대기시키지 않는다."""
+    s = get_settings()
+    radius_m = radius_m if radius_m is not None else _cfg(
+        "food_search_radius_m", _DEFAULT_FOOD_SEARCH_RADIUS_M)
+    if s.tourapi_service_key:
+        try:
+            cands = await _fetch_candidates_async(map_x, map_y, radius_m)
+        except Exception as e:
+            logger.warning("식음 후보 fetch 실패 → mock 폴백: %s", e)
+            cands = _mock_candidates()
+    else:
+        logger.info("TourAPI 키 없음 → mock 식음 후보 사용")
+        cands = _mock_candidates()
+    if budget is not None:
+        target_band = budget_to_band(budget)
+        cands = [c for c in cands
+                 if c.get("price_band") is None or c["price_band"] <= target_band]
+    return cands[:limit]
+
+
+async def interleave_food_async(route: list[dict], *, budget: int | None = None,
+                                headcount: int = 1,
+                                per_route: int | None = None) -> list[dict]:
+    """비동기 시나리오 생성 경로용 식음 삽입.
+
+    후보 조회를 ``await``하여 ``ThreadPoolExecutor(...).result()``로 이벤트 루프를
+    막지 않는다. 기존 동기 ``interleave_food``는 직접 호출 호환을 위해 유지한다.
+    """
+    s = get_settings()
+    per_route = s.scenario_food_per_route if per_route is None else per_route
+    if per_route <= 0 or len(route) < 2:
+        return route
+
+    slots = plan_slots(budget, headcount, per_route)
+    if not slots:
+        return route
+    target_band = budget_to_band(budget / max(1, headcount)) if budget is not None else 2
+    segs = gap_segments(route)
+    if not segs:
+        return route
+
+    candidate_groups = await asyncio.gather(*[
+        nearby_food_async(
+            segs[min(slot_i, len(segs) - 1)][3],
+            segs[min(slot_i, len(segs) - 1)][2],
+        )
+        for slot_i in range(len(slots))
+    ])
+
+    picked: list[tuple[int, dict]] = []
+    used_ids = {n["node_id"] for n in route}
+    for slot_i, kind in enumerate(slots):
+        _d, ins_idx, _mid_lat, _mid_lng = segs[min(slot_i, len(segs) - 1)]
+        cands = candidate_groups[slot_i]
+        choice = pick_candidate(cands, kind, target_band, used_ids)
+        if choice is None and kind == "food":
+            choice = pick_candidate(cands, "cafe", target_band, used_ids)
+        if choice is None:
+            continue
+        used_ids.add(choice["node_id"])
+        picked.append((ins_idx, {
+            **choice,
+            "coupon": {"to_kind": "food", "amount": 500},
+        }))
+
+    if not picked:
+        return route
+    new_route = list(route)
+    for ins_idx, node in sorted(picked, key=lambda pair: -pair[0]):
+        new_route.insert(ins_idx, node)
+    return new_route
