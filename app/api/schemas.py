@@ -92,6 +92,8 @@ class ScenarioGenResponse(BaseModel):
     is_public: bool = False
     created_by: str | None = None
     budget: int | None = None
+    transport: str = "walk"             # 요청 이동수단(반경 산출 근거) — 저장·검증용
+    wishlist_content_ids: list[str] = Field(default_factory=list)  # 위시 앵커 content_id(앱 표시용)
     is_branching: bool = False          # 갈림길 포함 여부(선형이면 False)
     route_tree: dict | None = None      # 분기 그래프(node_id→{next, choices}). 선형이면 None
 
