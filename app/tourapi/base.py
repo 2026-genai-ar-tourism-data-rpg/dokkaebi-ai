@@ -32,6 +32,23 @@ def _common_params() -> dict:
     }
 
 
+def _reason(e: Exception) -> str:
+    """예외를 사람이 읽을 수 있는 원인 문구로. 메시지가 비면 타입명으로 대체한다.
+
+    httpx.ReadTimeout('') 처럼 str()이 빈 예외가 흔해서, 그대로 쓰면
+    "TourAPI 네트워크 오류(...): " 같은 원인 없는 메시지가 앱까지 전달된다.
+    """
+    kind = {
+        "ConnectTimeout": "연결 시간 초과",
+        "ReadTimeout": "응답 시간 초과",
+        "ConnectError": "연결 실패",
+        "ReadError": "응답 read 실패",
+        "PoolTimeout": "커넥션 풀 대기 초과",
+    }.get(type(e).__name__, "네트워크 오류")
+    detail = str(e).strip()
+    return f"{kind}[{type(e).__name__}]" + (f": {detail}" if detail else "")
+
+
 async def request(base_url: str, operation: str, params: dict, *, timeout: float | None = None) -> dict:
     """단일 페이지 호출 → {items, pageNo, numOfRows, totalCount}.
 
@@ -46,7 +63,9 @@ async def request(base_url: str, operation: str, params: dict, *, timeout: float
         async with httpx.AsyncClient(timeout=timeout or s.tourapi_timeout) as client:
             resp = await client.get(url, params=full)
     except httpx.HTTPError as e:
-        raise TourAPIError(f"TourAPI 네트워크 오류({operation}): {e}") from e
+        # httpx 예외는 str()이 비는 경우가 많다(예: ReadTimeout('')) → 타입명을 항상 남긴다.
+        # 안 그러면 앱까지 "TourAPI 네트워크 오류(...): " 처럼 원인 없는 메시지가 전달된다.
+        raise TourAPIError(f"TourAPI {_reason(e)}({operation})") from e
     if resp.status_code >= 400:
         raise TourAPIError(f"TourAPI HTTP {resp.status_code}({operation}): {resp.text[:200]}")
     return _unwrap(resp.json(), operation)

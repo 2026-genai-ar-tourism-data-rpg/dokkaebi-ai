@@ -24,7 +24,7 @@ import httpx
 
 from app.config import get_settings
 from app.core.logger import get_logger
-from app.tourapi.base import TourAPIError, request_all
+from app.tourapi.base import TourAPIError, _reason, request_all
 
 logger = get_logger(__name__)
 
@@ -262,7 +262,8 @@ def _sync_request(base_url: str, operation: str, params: dict, *, timeout: float
         with httpx.Client(timeout=timeout or s.tourapi_timeout) as client:
             resp = client.get(url, params=full)
     except httpx.HTTPError as e:
-        raise TourAPIError(f"TourAPI 네트워크 오류({operation}): {e}") from e
+        # 원인 없는 빈 메시지 방지 — base._reason이 타입명까지 남긴다.
+        raise TourAPIError(f"TourAPI {_reason(e)}({operation})") from e
 
     if resp.status_code >= 400:
         raise TourAPIError(f"TourAPI HTTP {resp.status_code}({operation}): {resp.text[:200]}")
