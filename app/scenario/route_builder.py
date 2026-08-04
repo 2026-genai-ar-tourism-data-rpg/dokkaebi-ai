@@ -55,11 +55,12 @@ def build_route(
     # ② 앵커 + 가까운 후보로 count개 선택
     route = _select_count(nodes, anchors, count)
 
-    # ③ 동선 정렬: NN 초기해 → 2-opt 개선(출발점 기준). 없으면 dist_m 순 폴백
-    route = _order_route(route, start_x, start_y)
+    # ③ 동선 정렬: 출발점→경유지→종료점 전체 비용을 기준으로 NN+2-opt 개선.
+    route = _order_route(route, start_x, start_y, end_x, end_y)
 
-    # ④ 피날레: 끝점(집)에 가장 가까운 노드를 맨 뒤로 (출발→경유→집 동선)
-    route = _place_finale(route, end_x, end_y)
+    # 출발좌표가 없는 레거시 직접 호출만 기존 피날레 후처리를 유지한다.
+    if start_x is None or start_y is None:
+        route = _place_finale(route, end_x, end_y)
 
     # ⑤ 식음(카페·식당) 삽입 — '밥 싫음'이면 통째로 skip, 아니면 예산 내에서
     if not no_meals:
@@ -74,13 +75,35 @@ def build_route(
     return route
 
 
+def _dedupe_anchors(anchors: list[dict]) -> list[dict]:
+    """node_id가 같은 앵커를 하나로 병합한다.
+
+    위시와 저혼잡 선택이 같은 장소를 동시에 고르면 경로에 중복 방문이 생길 수 있다.
+    입력 순서는 유지하되 뒤 앵커의 부가 메타를 병합하고, wishlist source는 보존한다.
+    """
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for anchor in anchors:
+        node_id = anchor["node_id"]
+        if node_id not in merged:
+            merged[node_id] = dict(anchor)
+            order.append(node_id)
+            continue
+        current = merged[node_id]
+        combined = {**current, **anchor}
+        if current.get("source") == "wishlist" or anchor.get("source") == "wishlist":
+            combined["source"] = "wishlist"
+        merged[node_id] = combined
+    return [merged[node_id] for node_id in order]
+
+
 def _select_count(nodes: list[dict], anchors: list[dict], count: int) -> list[dict]:
     """앵커를 먼저 확보하고 남은 슬롯을 가까운 후보(nodes는 이미 거리순)로 채워 count개 선택.
 
     선택만 담당 — 최종 방문 순서는 _order_route가 정한다(NN 동선).
     앵커가 count를 넘어도 전부 보존한다(결정 C) — 거리 채움만 count 도달 시 중단.
     """
-    selected: list[dict] = list(anchors)
+    selected: list[dict] = _dedupe_anchors(anchors)
     seen = {a["node_id"] for a in selected}
     for n in nodes:
         if len(selected) >= count:
@@ -91,13 +114,21 @@ def _select_count(nodes: list[dict], anchors: list[dict], count: int) -> list[di
     return selected
 
 
-def _path_len(seq: list[dict], start_x: float, start_y: float) -> float:
-    """출발점 → seq 순서대로 이어 걸을 때 총 직선거리(m). 열린 경로(집 복귀 제외)."""
+def _path_len(
+    seq: list[dict], start_x: float, start_y: float,
+    end_x: float | None = None, end_y: float | None = None,
+) -> float:
+    """출발점 → 경유지 → 종료점까지의 총 직선거리(m).
+
+    종료점이 없으면 기존 열린 경로 비용을 유지한다.
+    """
     total = 0.0
     px, py = start_x, start_y
     for n in seq:
         total += haversine_m(py, px, n["map_y"], n["map_x"])
         px, py = n["map_x"], n["map_y"]
+    if end_x is not None and end_y is not None:
+        total += haversine_m(py, px, end_y, end_x)
     return total
 
 
@@ -114,35 +145,44 @@ def _nearest_neighbor(route: list[dict], start_x: float, start_y: float) -> list
     return ordered
 
 
-def _two_opt(seq: list[dict], start_x: float, start_y: float) -> list[dict]:
+def _two_opt(
+    seq: list[dict], start_x: float, start_y: float,
+    end_x: float | None = None, end_y: float | None = None,
+) -> list[dict]:
     """2-opt 개선: 구간을 뒤집어 총거리가 줄면 채택. NN의 국소 꼬임(교차)을 편다.
 
     열린 경로(출발점 고정, 복귀 없음) 기준. 노드 수가 적어(≈5~7) O(n²) 반복도 저렴.
     """
     best = list(seq)
-    best_len = _path_len(best, start_x, start_y)
+    best_len = _path_len(best, start_x, start_y, end_x, end_y)
     improved = True
     while improved:
         improved = False
         for i in range(len(best) - 1):
             for j in range(i + 1, len(best)):
                 cand = best[:i] + best[i:j + 1][::-1] + best[j + 1:]
-                cand_len = _path_len(cand, start_x, start_y)
+                cand_len = _path_len(cand, start_x, start_y, end_x, end_y)
                 if cand_len + 1e-6 < best_len:
                     best, best_len = cand, cand_len
                     improved = True
     return best
 
 
-def _order_route(route: list[dict], start_x: float | None, start_y: float | None) -> list[dict]:
+def _order_route(
+    route: list[dict], start_x: float | None, start_y: float | None,
+    end_x: float | None = None, end_y: float | None = None,
+) -> list[dict]:
     """방문 순서 결정. 출발좌표 있으면 nearest-neighbor 초기해 → 2-opt로 개선,
     없으면 dist_m 순 폴백(dist_m 없는 노드는 맨 뒤).
 
     NN만으로는 '먼 곳으로 튀었다 되돌아오는' 꼬임이 남을 수 있어 2-opt로 근사 최적화한다.
     """
-    if start_x is None or start_y is None or len(route) <= 2:
+    if start_x is None or start_y is None or len(route) <= 1:
         return sorted(route, key=lambda n: n["dist_m"] if n.get("dist_m") is not None else float("inf"))
-    return _two_opt(_nearest_neighbor(route, start_x, start_y), start_x, start_y)
+    return _two_opt(
+        _nearest_neighbor(route, start_x, start_y),
+        start_x, start_y, end_x, end_y,
+    )
 
 
 def _place_finale(route: list[dict], end_x: float | None, end_y: float | None) -> list[dict]:

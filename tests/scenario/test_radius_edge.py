@@ -8,6 +8,7 @@
 # 구현일: 2026-07-14 | 작성: 정찬희 (radius-edge/jch/v1)
 # ============================================================
 import asyncio
+from unittest.mock import AsyncMock, patch
 
 from app.core.exceptions import DokkaebiAIError
 from app.scenario.generator import generate_basic_scenario
@@ -42,26 +43,43 @@ def test_select_count_fills_to_count_when_anchors_leq_count():
 
 
 def test_empty_radius_with_wishlist_builds_wish_only_route():
-    """결정 B: 반경 내 후보 0개 + 위시 있음 → raise 안 하고 위시 앵커만으로 경로 구성."""
-    scn = asyncio.run(generate_basic_scenario(
-        _FAR_X, _FAR_Y, radius_m=100, count=3,
-        with_dialogue=False, with_content=False, no_meals=True,
-        wishlist=[WishItem(content_id="1", name="위시전용", lat=_FAR_Y, lng=_FAR_X)],
-    ))
+    """결정 B: 후보 0개 + 위시 있음 → 위시 앵커만으로 경로 구성."""
+    with patch(
+        "app.scenario.generator._tour.location_based_list",
+        new=AsyncMock(return_value=[]),
+    ):
+        scn = asyncio.run(generate_basic_scenario(
+            _FAR_X, _FAR_Y, radius_m=100, count=3,
+            with_dialogue=False, with_content=False, no_meals=True,
+            wishlist=[
+                WishItem(
+                    content_id="1",
+                    name="위시전용",
+                    lat=_FAR_Y,
+                    lng=_FAR_X,
+                )
+            ],
+        ))
+
     assert scn["stone_total"] == 1
     assert scn["node_sequence"][0]["name"] == "위시전용"
 
 
 def test_empty_radius_without_wishlist_still_raises():
-    """회귀: 위시 없이 반경 내 후보 0개면 기존과 동일하게 raise."""
-    raised = False
-    try:
-        asyncio.run(generate_basic_scenario(
-            _FAR_X, _FAR_Y, radius_m=100, count=3,
-            with_dialogue=False, with_content=False, no_meals=True,
-        ))
-    except DokkaebiAIError:
-        raised = True
+    """회귀: 위시 없이 후보 0개면 기존과 동일하게 raise."""
+    with patch(
+        "app.scenario.generator._tour.location_based_list",
+        new=AsyncMock(return_value=[]),
+    ):
+        raised = False
+        try:
+            asyncio.run(generate_basic_scenario(
+                _FAR_X, _FAR_Y, radius_m=100, count=3,
+                with_dialogue=False, with_content=False, no_meals=True,
+            ))
+        except DokkaebiAIError:
+            raised = True
+
     assert raised
 
 

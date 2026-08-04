@@ -39,6 +39,7 @@ from app.scenario.route_branching import attach_branch, pick_alternate, select_b
 from app.scenario.route_builder import build_route
 from app.services.dialogue_service import run_dialogue
 from app.tourapi.client import TourAPIClient
+from app.tourapi.food import interleave_food_async
 logger = get_logger(__name__)
 # 핫패스 공용 TourAPI 클라이언트 (키 없으면 mock)
 _tour = TourAPIClient()
@@ -83,7 +84,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
     """
     s = get_settings()
     radius = req.radius_m or (s.scenario_radius_car_m if req.transport == "car" else s.scenario_radius_walk_m)
-    end = req.end
+    end = req.end or req.start
     scn = await generate_basic_scenario(
         req.start.lng, req.start.lat, region=req.region, radius_m=radius,
         with_dialogue=req.with_dialogue, with_content=req.with_content,
@@ -127,9 +128,15 @@ async def generate_basic_scenario(
     # 1.5) 노드 선택/배열 seam — 앵커 강제포함 + 거리순 채우기 + 피날레 + 식음 삽입
     route = build_route(
         nodes, count=count, start_x=map_x, start_y=map_y, end_x=end_x, end_y=end_y,
-        wishlist=wishlist, budget=budget, no_meals=no_meals,
+        wishlist=wishlist, budget=budget, no_meals=True,
         lowtraffic_k=s.scenario_lowtraffic_anchors,
     )
+    if not route:
+        raise DokkaebiAIError(
+            "배치 가능한 관광지가 없습니다. 위시리스트 장소의 좌표를 확인해 주세요."
+        )
+    if not no_meals:
+        route = await interleave_food_async(route, budget=budget)
     # 노드 역할 메타(조각 번호·피날레·식음 분리). total은 '관광 노드'만 셈.
     metas = _plan_nodes(route)
     stone_total = metas[0]["stone_total"] if metas else 0
