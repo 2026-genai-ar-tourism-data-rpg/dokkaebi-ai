@@ -331,6 +331,8 @@ def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
         "map_x": node.get("map_x"), "map_y": node.get("map_y"),
         "dist_m": node.get("dist_m"),
         "density_tier": node.get("density_tier"),
+        "source": node.get("source"),
+        "out_of_radius": node.get("out_of_radius"),
         "mission": mission,      # 타입별 미션(생성 시 1회). 핵심: 노드마다 다른 종류
         "quiz": quiz,            # 앱 호환: 질문형이면 채워짐, 아니면 None
         "objective": objective,  # AR 지령 + 단계 힌트(모든 타입 공통)
@@ -356,6 +358,8 @@ def _build_food_quest(node: dict, order: int, dialogue: str) -> dict:
         "price_band": node.get("price_band") or node.get("band"),
         "price_band_label": node.get("price_band_label"),
         "coupon": node.get("coupon"),                    # 상권 쿠폰(food hook 부착)
+        "source": node.get("source"),
+        "out_of_radius": node.get("out_of_radius"),
         "mission": None,
         "quiz": None,
         "objective": None,
@@ -385,6 +389,8 @@ def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
         "map_x": node.get("map_x"), "map_y": node.get("map_y"),
         "dist_m": node.get("dist_m"),
         "density_tier": node.get("density_tier"),
+        "source": node.get("source"),
+        "out_of_radius": node.get("out_of_radius"),
         "mission": mission,
         "quiz": quiz,
         "objective": objective,
