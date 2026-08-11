@@ -1,12 +1,13 @@
 # ============================================================
 # [v1] 작업 큐 인터페이스 + 워커 풀
 # pipeline: 공통 인프라 (고처리량 배치: 임베딩·시나리오 사전생성·수집)
-# 구현(요약): WorkQueue 추상 인터페이스 + InMemoryWorkQueue(asyncio) +
+# 구현(요약): WorkQueue 추상 인터페이스 + InMemoryWorkQueue(asyncio) + RedisWorkQueue +
 #            run_workers(N개 워커 병렬 소비) + process_batch(원샷 배치 헬퍼).
-#            외부 큐(Redis/SQS)는 같은 인터페이스로 교체 가능(파일 1개 추가)
 # 구현일: 2026-06-10 | 작성: kys (base-pipeline/kys/v1)
+# 수정일: 2026-08-12 | RedisWorkQueue 구현: 정찬희 (SqsWorkQueue는 미착수 — 근거 없음, 최종 보고 참조)
 # ============================================================
 import asyncio
+import pickle
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable, Sequence
 
@@ -21,9 +22,9 @@ SHUTDOWN = object()
 class WorkQueue(ABC):
     """작업 큐 추상 인터페이스.
 
-    구현체 교체로 인프로세스 ↔ 외부 큐(Redis/SQS) 전환:
+    구현체 교체로 인프로세스 ↔ 외부 큐(Redis) 전환:
       - InMemoryWorkQueue : 단일 프로세스·휘발성 (baseline)
-      - (TODO) RedisWorkQueue/SqsWorkQueue : 크로스 프로세스·내구성·재시도
+      - RedisWorkQueue    : 크로스 프로세스·내구성
     핫패스 동기 호출의 동시성 제한은 큐가 아니라 LLMClient 세마포어가 담당(역할 분리).
     """
 
@@ -66,6 +67,51 @@ class InMemoryWorkQueue(WorkQueue):
     async def join(self) -> None:
         """전 작업 완료 대기."""
         await self._q.join()
+
+
+# SHUTDOWN은 object()라 프로세스마다 identity가 달라 pickle을 그대로 태우면 워커의
+# `job is SHUTDOWN` 식별이 깨진다 → 별도 마커로 왕복시켜 get()에서 로컬 SHUTDOWN으로 복원.
+_SHUTDOWN_MARKER = b"__DOKKAEBI_QUEUE_SHUTDOWN__"
+
+
+class RedisWorkQueue(WorkQueue):
+    """Redis 리스트(LPUSH/BRPOP) 기반 작업 큐. 여러 프로세스가 같은 key를 공유해 put/get 가능
+    (크로스 프로세스 분배 + 워커 프로세스 재시작에도 큐 내용 유지 = 내구성).
+
+    job은 pickle로 직렬화 — 내부 배치 파이프라인 전용(신뢰 경계 밖 입력을 이 큐에 넣지 말 것).
+    Redis 연결 오류는 (RedisCache와 달리) 그대로 올린다: 배치 작업은 조용히 유실시키면 안 되는
+    영역이라 상위(run_workers의 handler try/except, 또는 재시도 로직)에서 처리하게 둔다.
+
+    ⚠️ task_done()/join()은 이 인스턴스가 로컬로 put()한 작업 수만 추적한다(InMemoryWorkQueue와
+    동일한 카운터 방식). 다른 프로세스가 넣거나 처리하는 작업은 이 join()에 안 잡힌다 —
+    여러 프로세스 간 "전부 끝났다" 동기화가 필요하면 별도 신호(결과 큐·DB 완료 플래그 등)를 쓸 것.
+    """
+
+    def __init__(self, url: str, key: str) -> None:
+        import redis.asyncio as aioredis
+
+        self._r = aioredis.from_url(url)
+        self._key = key
+        self._local = asyncio.Queue()  # task_done/join 카운팅 전용 — job 데이터는 안 들고 있음
+
+    async def put(self, job: Any) -> None:
+        """작업 적재(pickle 직렬화 후 LPUSH)."""
+        payload = _SHUTDOWN_MARKER if job is SHUTDOWN else pickle.dumps(job)
+        await self._r.lpush(self._key, payload)
+        self._local.put_nowait(None)
+
+    async def get(self) -> Any:
+        """작업 1건 꺼냄(BRPOP, 없으면 대기)."""
+        _, raw = await self._r.brpop(self._key)
+        return SHUTDOWN if raw == _SHUTDOWN_MARKER else pickle.loads(raw)
+
+    def task_done(self) -> None:
+        """처리 완료 표시(로컬 카운터, join()용)."""
+        self._local.task_done()
+
+    async def join(self) -> None:
+        """이 인스턴스가 넣은 작업 기준 완료 대기(로컬 카운터 — 클래스 docstring 참고)."""
+        await self._local.join()
 
 
 async def run_workers(
