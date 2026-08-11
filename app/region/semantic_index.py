@@ -20,7 +20,8 @@ class RegionSemanticIndex:
     """한 지역의 노드 임베딩 인메모리 인덱스. brute-force 코사인 top-k.
 
     - add   : 빌드타임/지역 워밍 시 노드 벡터 적재 (정규화해 보관) — 이지선
-    - search: 쿼리 벡터로 top-k 노드 반환 — 박준형(재랭킹·쿼리변환·저신뢰 재검색은 TODO)
+    - search: 쿼리 벡터로 top-k 노드 반환(순수 코사인) — 박준형
+      재랭킹·쿼리변환·저신뢰 재검색은 텍스트·LLM이 필요해 pipeline/nodes/retrieve.py로 이관(정찬희)
     """
 
     def __init__(self, region_id: str, dim: int) -> None:
@@ -60,7 +61,7 @@ class RegionSemanticIndex:
         top_idx = np.argpartition(-scores, k - 1)[:k]  # 상위 k개(비정렬)
         top_idx = top_idx[np.argsort(-scores[top_idx])]  # 점수 내림차순 정렬
         results = [(self._ids[i], float(scores[i])) for i in top_idx if scores[i] >= min_score]
-        # TODO(박준형): 재랭킹(크로스인코더 등)·쿼리 변환·저신뢰(<임계) 시 재검색
+        # 재랭킹·쿼리변환·저신뢰 재검색은 pipeline/nodes/retrieve.py 참조(텍스트·LLM 접근이 필요해 상위로 이관)
         return results
 
     def __len__(self) -> int:
