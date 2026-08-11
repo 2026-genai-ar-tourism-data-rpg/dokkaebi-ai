@@ -30,7 +30,7 @@ _tour = TourAPIClient()
 @router.post("/dialogue", response_model=DialogueResponse)
 async def dialogue(req: DialogueRequest) -> DialogueResponse:
     """[엔드포인트] NPC 대화 생성 — 게임 서버 내부 호출용."""
-    text, hit = await run_dialogue(req.node_id, req.stage, req.player_state)
+    text, hit = await run_dialogue(req.node_id, req.stage, req.player_state, node_name=req.node_name)
     return DialogueResponse(response=text, cache_hit=hit)
 
 
