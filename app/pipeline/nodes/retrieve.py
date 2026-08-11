@@ -5,6 +5,8 @@
 #            배선까지 완료. top-k·재랭킹·신뢰도·저신뢰 재검색 알고리즘은 TODO(박준형).
 # 구현일: 2026-06-10 (의미검색 배선: 2026-06-16) | 작성: kys (semantic-search/kys/v1)
 # ============================================================
+import asyncio
+
 from app.config import get_settings
 from app.embeddings.client import EmbeddingClient
 from app.pipeline.state import DialogueState
@@ -35,9 +37,10 @@ async def retrieve(state: DialogueState) -> dict:
     index = get_region_index(region_id)
     hits = index.search(query_vec, top_k=s.search_top_k, min_score=s.search_min_score)
 
-    # 3) 히트 노드 → 주입할 청크 텍스트로 변환(지역 RAM 캐시에서)
+    # 3) 히트 노드 → 주입할 청크 텍스트로 변환(지역 RAM 캐시에서, 미스는 병렬 재조회)
     cache = get_region_cache()
-    chunks = [cache.get_text(node_id) or node_id for node_id, _ in hits]
+    texts = await asyncio.gather(*[cache.get_text(node_id) for node_id, _ in hits])
+    chunks = [text or node_id for text, (node_id, _) in zip(texts, hits)]
     confidence = hits[0][1] if hits else 0.0
 
     # TODO(박준형): 재랭킹·쿼리 변환·confidence < 임계 시 재검색 루프
