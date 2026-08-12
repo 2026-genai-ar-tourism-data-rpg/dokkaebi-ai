@@ -11,25 +11,17 @@ from app.config import get_settings
 from app.core.logger import get_logger
 from app.llm.client import LLMClient
 from app.region.memory_cache import get_region_cache
-from app.tourapi.client import TourAPIClient
 
 logger = get_logger(__name__)
 
 _llm = LLMClient()
-_tour = TourAPIClient()
 _TONE = "도깨비 말투(어미 '~니라/~겠느냐', 감탄 '허허'), 2~3문장, 군더더기·메타설명 금지."
 
 
 async def _grounding(node_id: str, node_name: str) -> str:
-    """대사 근거 텍스트 확보: 지역캐시 → (미스) detailCommon2 → 이름."""
-    ctx = get_region_cache().get_text(node_id)
-    if ctx:
-        return ctx
-    if node_id.startswith("tour_"):
-        detail = await _tour.detail_common(node_id.split("_", 1)[1])
-        if detail and detail.get("overview"):
-            return detail["overview"]
-    return node_name or ""
+    """대사 근거 텍스트 확보: 지역캐시(미스 시 캐시가 자체적으로 TourAPI 재조회) → 이름."""
+    ctx = await get_region_cache().get_text(node_id)
+    return ctx or node_name or ""
 
 
 def _inventory_text(inventory: dict | None) -> str:

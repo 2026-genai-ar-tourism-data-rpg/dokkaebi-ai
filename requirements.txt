@@ -6,4 +6,5 @@ pydantic-settings>=2.2
 langgraph>=0.2
 httpx>=0.27
 numpy>=1.26        # 의미검색 인덱스(인메모리 코사인) — semantic-search/kys/v1, 2026-06-16
+redis>=5.0          # RedisCache(cache-wire/kys/v1)·RedisWorkQueue(core/queue.py) 공용, 미설치 시 각자 폴백
 pytest

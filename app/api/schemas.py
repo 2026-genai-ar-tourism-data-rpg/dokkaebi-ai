@@ -11,6 +11,7 @@ class DialogueRequest(BaseModel):
     """NPC 대화 요청 — 게임 서버(dokkaebi-server)가 내부 HTTP로 호출."""
 
     node_id: str = Field(..., description="장소 노드 ID")
+    node_name: str = Field("", description="장소 표시명 — 페르소나 합성 입력(8-B)")
     stage: str = Field("등장", description="등장|의뢰|힌트|완료")
     player_state: dict = Field(default_factory=dict, description="진행도·보유 조각·이전 대화 요약")
 
