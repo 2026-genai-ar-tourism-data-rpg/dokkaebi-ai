@@ -3,6 +3,9 @@
 # pipeline: AI 백엔드 / 서빙 레이어 (진입점)
 # 구현(요약): POST /v1/dialogue · POST /v1/scenarios · GET /v1/health
 # 구현일: 2026-06-10 (시나리오 추가: 2026-06-18) | 작성: kys
+# ------------------------------------------------------------
+# [v2] headcount(인원수)를 ScenarioRequest로 전달 — 식음 예산 게이팅 배선(기본 1).
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 from fastapi import APIRouter
 
@@ -56,6 +59,7 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         transport=req.transport,
         wishlist=[WishItem(content_id=w.content_id, name=w.name, lat=w.lat, lng=w.lng, kind=w.kind) for w in req.wishlist],
         budget=req.budget,
+        headcount=req.headcount,
         no_meals=req.no_meals,
         region=req.region,
         with_dialogue=req.with_dialogue,
