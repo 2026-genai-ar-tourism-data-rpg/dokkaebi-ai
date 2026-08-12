@@ -136,8 +136,8 @@ def test_region_cache_warm_merges_instead_of_replacing():
     cache.warm("종로", {"tour_1": "경복궁 설명", "tour_2": "창덕궁 설명"})
     cache.warm("종로", {"tour_9": "샛길 설명"})
 
-    assert cache.get_text("tour_1") == "경복궁 설명"
-    assert cache.get_text("tour_9") == "샛길 설명"
+    assert asyncio.run(cache.get_text("tour_1")) == "경복궁 설명"
+    assert asyncio.run(cache.get_text("tour_9")) == "샛길 설명"
 
 
 def test_region_cache_warm_keeps_existing_text_on_empty_overview():
@@ -146,19 +146,19 @@ def test_region_cache_warm_keeps_existing_text_on_empty_overview():
     cache.warm("종로", {"tour_1": "경복궁 설명"})
     cache.warm("종로", {"tour_1": ""})
 
-    assert cache.get_text("tour_1") == "경복궁 설명"
+    assert asyncio.run(cache.get_text("tour_1")) == "경복궁 설명"
 
 
 def test_region_cache_bounds_nodes_per_region():
     """병합으로 바뀐 만큼 지역당 노드 수는 LRU 상한으로 묶여야 한다(무한 증식 방지)."""
     cache = RegionMemoryCache(max_regions=2, max_nodes_per_region=2)
     cache.warm("종로", {"n1": "1", "n2": "2"})
-    cache.get_text("n1")                      # n1을 최근 사용으로 갱신 → evict 대상은 n2
+    asyncio.run(cache.get_text("n1"))          # n1을 최근 사용으로 갱신 → evict 대상은 n2
     cache.warm("종로", {"n3": "3"})
 
-    assert cache.get_text("n1") == "1"
-    assert cache.get_text("n3") == "3"
-    assert cache.get_text("n2") is None
+    assert asyncio.run(cache.get_text("n1")) == "1"
+    assert asyncio.run(cache.get_text("n3")) == "3"
+    assert asyncio.run(cache.get_text("n2")) is None
 
 
 # --- [v4] 식음 노드 dist_m · headcount 배선 (ai-logic-fix/pjh/v2) ---

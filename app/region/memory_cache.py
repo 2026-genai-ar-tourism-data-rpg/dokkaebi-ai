@@ -34,7 +34,6 @@ class RegionMemoryCache:
 
     - LRU로 동시 상주 지역 수를 config.region_cache_max로 제한
     - 지역 안에서도 노드 수를 config.region_cache_nodes_max로 제한(LRU)
-    - 휘발성/인스턴스별 → 어디까지나 읽기 캐시(소스 오브 트루스 = DB)
     - 휘발성/인스턴스별 → 어디까지나 읽기 캐시(소스 오브 트루스 = TourAPI)
     - 미스 시 TourAPI에서 그 노드 하나만 재조회해 캐시에 반영 후 반환
     """
@@ -72,7 +71,7 @@ class RegionMemoryCache:
             evicted, _ = self._regions.popitem(last=False)
             logger.info("지역 캐시 evict(LRU): %s", evicted)
 
-    def get_text(self, node_id: str) -> str | None:
+    async def get_text(self, node_id: str) -> str | None:
         """상주 중인 지역들에서 노드 텍스트 조회. 미스면 None. 히트한 노드는 LRU 갱신."""
         for nodes in self._regions.values():
             if node_id in nodes:

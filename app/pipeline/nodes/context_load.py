@@ -17,5 +17,7 @@ async def context_load(state: DialogueState) -> dict:
     node_id = state.get("node_id", "")
     cache = get_region_cache()
     text = await cache.get_text(node_id)  # 미스 시 cache가 TourAPI 재조회까지 시도
-    # TODO(박준형): 텍스트가 컨텍스트 한도 초과/교차검색 필요 시 use_rag=True 로 분기
-    return {"context": text or "", "use_rag": False}
+    # TODO(박준형): 텍스트가 컨텍스트 한도 초과/교차검색 필요 시 use_rag=True로 자동 분기하는 로직.
+    # 그 로직이 들어오기 전까지는, 호출측이 이미 정한 use_rag를 그대로 보존한다(기본 False) —
+    # 여기서 무조건 False로 덮어쓰면 retrieve 노드가 영영 못 탄다(실행 검증 중 발견한 버그, #실행확인 2026-08-12).
+    return {"context": text or "", "use_rag": state.get("use_rag", False)}
