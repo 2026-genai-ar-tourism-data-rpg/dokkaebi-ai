@@ -137,9 +137,14 @@ class Settings(BaseSettings):
     cache_backend: str = "memory"
     cache_ttl_s: int = 86400            # 대사 캐시 TTL(초) — 기본 1일
     tourapi_cache_ttl_s: int = 604800   # 노드 상세(overview) 캐시 TTL — 기본 7일(거의 정적)
+    # memory 백엔드 엔트리 상한 — 만료됐지만 재조회되지 않는 키가 쌓이는 것을 막는다.
+    cache_max_entries: int = 10000      # 초과 시 만료분 정리 → 오래된 순 제거
 
     # --- 지역 인메모리 캐시 (존 서버 패턴) ---
     region_cache_max: int = 8           # 동시 상주 지역 수 (LRU)
+    # warm()이 병합이라 지역 워킹셋이 계속 누적된다 → 지역당 노드 수도 LRU로 상한.
+    # 노드당 overview 수 KB 기준, 8지역 × 500노드면 수십 MB 수준.
+    region_cache_nodes_max: int = 500   # 지역당 상주 노드 수 (LRU)
 
     # --- 작업 큐 / 워커 (고처리량 배치) ---
     worker_count: int = 4               # 작업 큐 병렬 소비 워커 수
