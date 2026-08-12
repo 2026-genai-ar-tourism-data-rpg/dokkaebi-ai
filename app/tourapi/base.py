@@ -5,6 +5,14 @@
 #            + resultCode 검증(HTTP200≠성공) + items 언랩 + 페이지네이션(request_all).
 #            서비스별 normalize는 각 client가 담당(모듈 분리).
 # 구현일: 2026-06-18 | 작성: kys (bigdata-client/kys/v1)
+# ------------------------------------------------------------
+# [v2] 업스트림 장애를 구분 가능한 예외로 — TourAPITimeoutError 분리.
+# 구현(요약): TourAPIError가 DokkaebiAIError 하나로만 뭉쳐 있어 api/errors.py의
+#            도메인 핸들러(422 domain_error)에 잡혔다. 관광공사 장애는 사용자가 입력을
+#            바꿔도 안 풀리는데 앱은 "조건을 바꿔보라"로 안내하게 된다.
+#            → 네트워크/타임아웃 계열을 TourAPITimeoutError로 분리해 재시도 가능(503)과
+#              업스트림 실패(502)를 앱이 구분할 수 있게 한다. 매핑은 api/errors.py.
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 import httpx
 
@@ -19,6 +27,14 @@ _OK_CODES = ("0000", "00", "0")  # 서비스별로 정상 코드 표기가 약�
 
 class TourAPIError(DokkaebiAIError):
     """TourAPI 호출 실패(에러 resultCode·네트워크·키 없음 등)."""
+
+
+class TourAPITimeoutError(TourAPIError):
+    """TourAPI 네트워크 계열 실패(타임아웃·연결 실패) — 잠시 후 재시도하면 풀릴 수 있다.
+
+    resultCode 오류(요청 자체가 잘못)와 달리 우리도 사용자도 고칠 게 없는 일시 장애라,
+    api/errors.py가 이걸 503 + Retry-After로 내보내 앱이 재시도를 안내하게 한다.
+    """
 
 
 def _common_params() -> dict:
@@ -49,6 +65,11 @@ def _reason(e: Exception) -> str:
     return f"{kind}[{type(e).__name__}]" + (f": {detail}" if detail else "")
 
 
+def network_error(e: Exception, operation: str) -> TourAPITimeoutError:
+    """httpx 예외 → 재시도 가능한 TourAPITimeoutError. 동기/비동기 호출부 공용."""
+    return TourAPITimeoutError(f"TourAPI {_reason(e)}({operation})")
+
+
 async def request(base_url: str, operation: str, params: dict, *, timeout: float | None = None) -> dict:
     """단일 페이지 호출 → {items, pageNo, numOfRows, totalCount}.
 
@@ -65,7 +86,7 @@ async def request(base_url: str, operation: str, params: dict, *, timeout: float
     except httpx.HTTPError as e:
         # httpx 예외는 str()이 비는 경우가 많다(예: ReadTimeout('')) → 타입명을 항상 남긴다.
         # 안 그러면 앱까지 "TourAPI 네트워크 오류(...): " 처럼 원인 없는 메시지가 전달된다.
-        raise TourAPIError(f"TourAPI {_reason(e)}({operation})") from e
+        raise network_error(e, operation) from e
     if resp.status_code >= 400:
         raise TourAPIError(f"TourAPI HTTP {resp.status_code}({operation}): {resp.text[:200]}")
     return _unwrap(resp.json(), operation)

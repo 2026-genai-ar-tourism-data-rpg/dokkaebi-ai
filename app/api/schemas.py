@@ -3,6 +3,10 @@
 # pipeline: AI 백엔드 / 서빙 레이어 (계약)
 # 구현(요약): Dialogue + Scenario 생성 요청/응답 정의
 # 구현일: 2026-06-10 (시나리오 추가: 2026-06-18) | 작성: kys
+# ------------------------------------------------------------
+# [v2] headcount(인원수) 요청/응답 필드 추가 — 식음 예산 게이팅 1인 예산 산출용.
+#      기본 1 · ge=1 검증. 미전송 시 기존 동작 그대로(하위호환).
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 from pydantic import BaseModel, Field
 
@@ -73,7 +77,8 @@ class ScenarioGenRequest(BaseModel):
     radius_m: int | None = None
     transport: str = "walk"
     wishlist: list[WishItemSchema] = Field(default_factory=list)
-    budget: int | None = None
+    budget: int | None = None                            # 일행 전체 예상 지출 상한
+    headcount: int = Field(1, ge=1, description="인원수. 1인 예산 = budget/headcount")
     no_meals: bool = False                               # '밥 안 먹음' → 식음 노드 skip
     region: str = "종로"
     with_dialogue: bool = True
@@ -93,6 +98,7 @@ class ScenarioGenResponse(BaseModel):
     is_public: bool = False
     created_by: str | None = None
     budget: int | None = None
+    headcount: int = 1                  # 요청 인원수(예산 게이팅 근거) — 저장·검증용
     transport: str = "walk"             # 요청 이동수단(반경 산출 근거) — 저장·검증용
     wishlist_content_ids: list[str] = Field(default_factory=list)  # 위시 앵커 content_id(앱 표시용)
     is_branching: bool = False          # 갈림길 포함 여부(선형이면 False)

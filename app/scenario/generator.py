@@ -18,6 +18,18 @@
 #            미션 텍스트↔액션 시퀀스 모순 차단. run_qa 배선(_run_qa_log, 경고 로그).
 #            샛길(분기) 노드도 동일 순서 적용. enrich_quest에 motivations 전달.
 # 구현일: 2026-07-30 | 작성: pjh (node-schema-gen/pjh/v1)
+# ------------------------------------------------------------
+# [v4] 식음 노드 dist_m 누락 수정 + headcount(인원수) 배선.
+# 구현(요약): ① 식음 삽입이 build_route 밖(async)으로 나가면서 build_route의 ⑥ dist_m
+#              backfill 뒤에 노드가 추가돼, 식음 노드만 dist_m=None으로 앱에 나갔다
+#              → 삽입 후 backfill_dist_m을 한 번 더 호출한다.
+#            ② 예산 게이팅은 1인 예산(budget/headcount) 기준인데 headcount가 요청부터
+#              food hook까지 배선돼 있지 않아 항상 1인으로 계산됐다(4인 총예산 → 4배 밴드).
+#              앱이 인원수를 보내기 전까지는 기본값 1이라 동작 변화 없음(하위호환).
+#            ③ build_route를 asyncio.to_thread로 호출 — 비인기 앵커 hook이 그 안에서
+#              동기 httpx(BigData 최대 40페이지)를 부르기 때문에, 코루틴에서 직접 호출하면
+#              그동안 이벤트 루프가 멈춰 서버의 모든 요청이 대기한다.
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 import asyncio
 import hashlib
@@ -36,7 +48,7 @@ from app.scenario.node_schema import (
 )
 from app.scenario.request import ScenarioRequest
 from app.scenario.route_branching import attach_branch, pick_alternate, select_branch_point, validate_tree
-from app.scenario.route_builder import build_route
+from app.scenario.route_builder import backfill_dist_m, build_route
 from app.services.dialogue_service import run_dialogue
 from app.tourapi.client import TourAPIClient
 from app.tourapi.food import interleave_food_async
@@ -90,11 +102,12 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
         with_dialogue=req.with_dialogue, with_content=req.with_content,
         end_x=end.lng if end else None, end_y=end.lat if end else None,
         wishlist=req.wishlist, budget=req.budget, no_meals=req.no_meals,
-        with_branching=req.with_branching,
+        headcount=req.headcount, with_branching=req.with_branching,
     )
     # 입력 메타 부착(저장·검증용)
     scn["created_by"] = req.user_id
     scn["budget"] = req.budget
+    scn["headcount"] = req.headcount
     scn["transport"] = req.transport
     # wishlist 앵커 강제포함은 route_builder.build_route(① 단계, 정찬희)가 처리. 여기선 메타만.
     if req.wishlist:
@@ -107,7 +120,7 @@ async def generate_basic_scenario(
     with_dialogue: bool = True, with_content: bool = True,
     end_x: float | None = None, end_y: float | None = None,
     wishlist: list | None = None, budget: int | None = None, no_meals: bool = False,
-    with_branching: bool = False,
+    headcount: int = 1, with_branching: bool = False,
 ) -> dict:
     """[거리순 v0] 가까운 N개 관광지로 '기억석 챕터' 생성 + 장소기반 NPC 대사.
     map_x=경도, map_y=위도. end_x/y 주면 끝점에 가장 가까운 노드를 피날레로.
@@ -126,7 +139,11 @@ async def generate_basic_scenario(
     if not nodes:
         logger.warning("반경 내 후보 없음 → 위시 앵커만으로 경로 구성")
     # 1.5) 노드 선택/배열 seam — 앵커 강제포함 + 거리순 채우기 + 피날레 + 식음 삽입
-    route = build_route(
+    #      build_route는 동기 함수인데 비인기 앵커 hook이 그 안에서 BigData를 동기 httpx로
+    #      호출한다(최대 40페이지). 코루틴에서 그냥 부르면 그동안 이벤트 루프 전체가 멈춰
+    #      다른 요청까지 대기한다 → to_thread로 워커 스레드에 넘긴다.
+    route = await asyncio.to_thread(
+        build_route,
         nodes, count=count, start_x=map_x, start_y=map_y, end_x=end_x, end_y=end_y,
         wishlist=wishlist, budget=budget, no_meals=True,
         lowtraffic_k=s.scenario_lowtraffic_anchors,
@@ -136,7 +153,9 @@ async def generate_basic_scenario(
             "배치 가능한 관광지가 없습니다. 위시리스트 장소의 좌표를 확인해 주세요."
         )
     if not no_meals:
-        route = await interleave_food_async(route, budget=budget)
+        route = await interleave_food_async(route, budget=budget, headcount=headcount)
+        # 식음 노드는 build_route의 backfill 이후에 삽입된다 → 여기서 거리를 채운다.
+        backfill_dist_m(route, map_x, map_y)
     # 노드 역할 메타(조각 번호·피날레·식음 분리). total은 '관광 노드'만 셈.
     metas = _plan_nodes(route)
     stone_total = metas[0]["stone_total"] if metas else 0

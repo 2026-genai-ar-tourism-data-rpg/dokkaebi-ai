@@ -5,6 +5,13 @@
 #            config.cache_backend로 선택. Redis 오류 시 graceful 미스(앱 안 죽음).
 #            provider 교체는 get_cache 한 곳에서만(LLM 패턴과 동일).
 # 구현일: 2026-06-18 | 작성: kys (cache-wire/kys/v1)
+# ------------------------------------------------------------
+# [v2] MemoryCache 무한 증식 차단 — 만료 항목 정리 + 엔트리 수 상한(LRU-ish).
+# 구현(요약): 기존 MemoryCache는 만료 항목을 '조회할 때만' 지우고 크기 상한이 없었다.
+#            다시 조회되지 않는 키(대사 1일·노드상세 7일·가격 7일)가 만료 후에도 계속
+#            남아 장기 구동 프로세스에서 서서히 샜다. set 시 상한 초과면 만료분을 먼저
+#            비우고, 그래도 넘치면 오래 들어온 순으로 버린다(dict 삽입순).
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 import time
 from abc import ABC, abstractmethod
@@ -26,10 +33,15 @@ class CacheBackend(ABC):
 
 
 class MemoryCache(CacheBackend):
-    """인프로세스 TTL 캐시. Redis 없이 구동(로컬·테스트). 휘발성·인스턴스별."""
+    """인프로세스 TTL 캐시. Redis 없이 구동(로컬·테스트). 휘발성·인스턴스별.
 
-    def __init__(self) -> None:
+    엔트리 수를 max_entries로 제한한다 — 만료됐지만 아무도 다시 조회하지 않는 키가
+    쌓이면 장기 구동 프로세스에서 메모리가 계속 늘어나기 때문.
+    """
+
+    def __init__(self, max_entries: int | None = None) -> None:
         self._store: dict[str, tuple[str, float | None]] = {}  # key -> (value, expire_at)
+        self._max = max_entries if max_entries is not None else get_settings().cache_max_entries
 
     async def get(self, key: str) -> str | None:
         v = self._store.get(key)
@@ -42,8 +54,23 @@ class MemoryCache(CacheBackend):
         return value
 
     async def set(self, key: str, value: str, ttl_s: int) -> None:
-        exp = time.monotonic() + ttl_s if ttl_s else None
+        exp = time.monotonic() + ttl_s if ttl_s else None   # ttl_s=0 → 만료 없음(영구)
         self._store[key] = (value, exp)
+        if len(self._store) > self._max:
+            self._evict()
+
+    def _evict(self) -> None:
+        """상한 초과 시 ① 만료분 정리 → ② 그래도 넘치면 오래 들어온 순으로 버린다."""
+        now = time.monotonic()
+        for key in [k for k, (_, exp) in self._store.items() if exp is not None and exp < now]:
+            self._store.pop(key, None)
+
+        overflow = len(self._store) - self._max
+        if overflow > 0:
+            # dict는 삽입 순서를 유지 → 앞쪽이 가장 오래된 항목
+            for key in list(self._store)[:overflow]:
+                self._store.pop(key, None)
+            logger.info("메모리 캐시 상한(%d) 초과 → 오래된 항목 %d개 제거", self._max, overflow)
 
 
 class RedisCache(CacheBackend):
