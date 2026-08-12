@@ -11,6 +11,18 @@
 # [v2] 동선 개선 — 위시 앵커 dist_m backfill(먼 위시가 맨 앞 튀는 버그) +
 #      단순 거리순 → nearest-neighbor 동선 정렬(지그재그 완화). start_x/y 필요.
 # 구현일: 2026-07-06 | 작성: kys (route-nn/kys/v1)
+# ------------------------------------------------------------
+# [v3] 좌표 결측 후보로 인한 500 수정 — 좌표 가드를 앵커에서 '후보 전체'로 확대.
+# 구현(요약): v1 seam 가드가 앵커만 검사해서, TourAPI가 mapx/mapy를 비워 보낸 일반 후보가
+#            _select_count로 들어오면 _nearest_neighbor/_path_len/_place_finale의
+#            haversine_m(None, ...)에서 TypeError → 시나리오 생성 요청 전체가 500이 됐다.
+#            (client._to_nodes는 mapx가 비면 map_x=None을 그대로 만든다.)
+#            → 진입부에서 후보를 한 번 거르고, 앵커 가드는 합성 앵커용으로 유지.
+#            위시 매칭 노드가 좌표 결측이면 위시 자체 좌표로 합성 앵커가 되어 오히려 살아난다.
+#      + dist_m backfill을 backfill_dist_m()으로 분리(재사용 가능하게).
+#        식음 삽입이 generator로 옮겨가면서 ⑥ backfill 뒤에 노드가 추가돼, 식음 노드만
+#        dist_m=None으로 앱에 나가고 있었다 — generator가 삽입 후 한 번 더 호출한다.
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 from app.core.logger import get_logger
 from app.scenario.density import select_lowtraffic_anchors
@@ -39,6 +51,10 @@ def build_route(
 
     nodes: location_based_list 결과(이미 거리순, dist_m 포함). count: 기억석 조각 수.
     """
+    # ⓪ seam 가드: 좌표 없는 후보를 먼저 걸러 낸다. 앵커만 검사하던 v1 가드로는
+    #    거리순 채움으로 들어온 좌표 결측 노드가 동선 정렬에서 그대로 터졌다(500).
+    nodes = _placeable(nodes, what="후보")
+
     # ① 앵커 수집 — 경로에 '반드시' 들어가야 하는 노드(위시리스트 + 비인기 샛길)
     anchors: list[dict] = []
     anchors += select_wishlist_anchors(nodes, wishlist or [])       # 정찬희 hook
@@ -47,10 +63,7 @@ def build_route(
 
     # seam 가드: 좌표(map_x/map_y) 없는 앵커는 동선 배치·거리계산 불가 → 드롭(500 방지).
     # (앱이 위시 좌표를 안 넘긴 경우 등. haversine None 크래시 예방 — kys 통합 책임)
-    placeable = [a for a in anchors if a.get("map_x") is not None and a.get("map_y") is not None]
-    if len(placeable) < len(anchors):
-        logger.warning("좌표 결측 앵커 %d개 드롭(배치 불가)", len(anchors) - len(placeable))
-    anchors = placeable
+    anchors = _placeable(anchors, what="앵커")
 
     # ② 앵커 + 가까운 후보로 count개 선택
     route = _select_count(nodes, anchors, count)
@@ -66,13 +79,38 @@ def build_route(
     if not no_meals:
         route = interleave_food(route, budget=budget)               # 박준형 hook
 
-    # ⑥ dist_m backfill(표시용) — 위시 합성앵커·TourAPI 누락·식음노드 전부 출발점 거리로.
-    if start_x is not None and start_y is not None:
-        for n in route:
-            if n.get("dist_m") is None and n.get("map_x") is not None and n.get("map_y") is not None:
-                n["dist_m"] = round(haversine_m(start_y, start_x, n["map_y"], n["map_x"]), 1)
+    # ⑥ dist_m backfill(표시용) — 위시 합성앵커·TourAPI 누락 노드를 출발점 거리로.
+    #    식음 노드는 generator가 이 뒤에 삽입하므로 거기서 한 번 더 호출한다.
+    return backfill_dist_m(route, start_x, start_y)
 
+
+def backfill_dist_m(
+    route: list[dict], start_x: float | None, start_y: float | None,
+) -> list[dict]:
+    """dist_m이 비어 있는 노드에 출발점 기준 직선거리를 채운다(표시용, 제자리 수정).
+
+    대상: 위시 합성 앵커(hook에 출발 좌표가 없어 None) · TourAPI dist 누락 ·
+          generator가 나중에 삽입한 식음 노드. 출발 좌표가 없으면 no-op.
+    """
+    if start_x is None or start_y is None:
+        return route
+    for n in route:
+        if n.get("dist_m") is None and n.get("map_x") is not None and n.get("map_y") is not None:
+            n["dist_m"] = round(haversine_m(start_y, start_x, n["map_y"], n["map_x"]), 1)
     return route
+
+
+def _placeable(nodes: list[dict], *, what: str) -> list[dict]:
+    """좌표(map_x/map_y)가 있는 노드만 남긴다 — 동선 배치·거리계산의 최소 전제.
+
+    좌표가 없으면 haversine_m이 TypeError로 터져 시나리오 생성 요청 전체가 실패한다.
+    한 노드 결측 때문에 코스를 통째로 못 만들 이유는 없으므로 드롭하고 WARN만 남긴다.
+    """
+    placeable = [n for n in nodes if n.get("map_x") is not None and n.get("map_y") is not None]
+    dropped = len(nodes) - len(placeable)
+    if dropped:
+        logger.warning("좌표 결측 %s %d개 드롭(배치 불가)", what, dropped)
+    return placeable
 
 
 def _dedupe_anchors(anchors: list[dict]) -> list[dict]:
