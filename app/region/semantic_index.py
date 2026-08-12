@@ -5,6 +5,11 @@
 #            코사인 top-k(search). Vector DB/ANN 없음(지역당 수십~수천 벡터면 numpy로 충분).
 #            인덱싱(add)=이지선 / top-k·재랭킹·임계 튜닝=박준형.
 # 구현일: 2026-06-16 | 작성: kys (semantic-search/kys/v1)
+# ------------------------------------------------------------
+# [v2] add() 입력 검증 — node_ids/vectors 개수 불일치를 즉시 raise.
+#      길이가 어긋나면 행↔ID 대응이 깨진 채 인덱스가 만들어져, search가 예외 없이
+#      '엉뚱한 노드'를 돌려준다(조용한 오답). 적재 시점에 잡는다.
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 from collections import OrderedDict
 
@@ -36,6 +41,11 @@ class RegionSemanticIndex:
         """
         if not node_ids:
             return
+        if len(node_ids) != len(vectors):
+            # 행 i ↔ node_ids[i] 대응이 깨지면 검색이 '조용히' 엉뚱한 노드를 돌려준다.
+            raise ValueError(
+                f"node_ids/vectors 개수 불일치: {len(node_ids)} != {len(vectors)}"
+            )
         mat = np.asarray(vectors, dtype=np.float32)
         if mat.shape[1] != self._dim:
             raise ValueError(f"임베딩 차원 불일치: {mat.shape[1]} != {self._dim}")
