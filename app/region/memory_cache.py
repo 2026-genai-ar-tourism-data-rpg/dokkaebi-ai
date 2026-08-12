@@ -39,8 +39,14 @@ class RegionMemoryCache:
     - 미스 시 TourAPI에서 그 노드 하나만 재조회해 캐시에 반영 후 반환
     """
 
-    def __init__(self, max_regions: int, max_nodes_per_region: int) -> None:
+    def __init__(
+        self,
+        max_regions: int,
+        max_nodes_per_region: int | None = None,
+    ) -> None:
         self._max = max_regions
+        if max_nodes_per_region is None:
+            max_nodes_per_region = get_settings().region_cache_nodes_max
         self._max_nodes = max(1, max_nodes_per_region)
         # region_id -> OrderedDict{node_id: text} (안쪽도 LRU)
         self._regions: "OrderedDict[str, OrderedDict[str, str]]" = OrderedDict()
@@ -72,8 +78,8 @@ class RegionMemoryCache:
             evicted, _ = self._regions.popitem(last=False)
             logger.info("지역 캐시 evict(LRU): %s", evicted)
 
-    def get_text(self, node_id: str) -> str | None:
-        """상주 중인 지역들에서 노드 텍스트 조회. 미스면 None. 히트한 노드는 LRU 갱신."""
+    async def get_text(self, node_id: str) -> str | None:
+        """노드 텍스트 조회. 미스면 TourAPI에서 재조회하고, 히트 시 LRU를 갱신."""
         for nodes in self._regions.values():
             if node_id in nodes:
                 nodes.move_to_end(node_id)     # 계속 쓰이는 노드는 evict 대상에서 밀어둔다
