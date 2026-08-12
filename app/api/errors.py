@@ -5,6 +5,15 @@
 #            도메인 실패=422 / rate limit=503(Retry-After) / 업스트림 실패=502 / 그 외=500.
 #            스택트레이스는 로그로만 남기고 응답 바디엔 절대 노출하지 않는다.
 # 구현일: 2026-08-02 | 작성: kys (branch-parity/kys/v1) · 이슈 #39
+# ------------------------------------------------------------
+# [v2] TourAPI 장애를 도메인 실패에서 분리 — 422 → 502/503.
+# 구현(요약): TourAPIError가 DokkaebiAIError를 상속해서 _domain_error(422)에 잡혔다.
+#            422는 "입력을 바꾸면 풀린다"는 뜻이라, 관광공사 서버 장애에도 앱이
+#            "다른 조건으로 시도하라"고 안내하게 된다(사용자가 뭘 해도 안 풀림).
+#            또 내부 오퍼레이션명이 그대로 노출됐다("...(locationBasedList2)").
+#            → 타임아웃/연결 실패=503(Retry-After, 재시도 안내) · 그 외 TourAPI 실패=502.
+#              응답 문구는 일반화하고 원문은 로그로만 남긴다.
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -18,6 +27,7 @@ from app.core.exceptions import (
     LLMRateLimitError,
 )
 from app.core.logger import get_logger
+from app.tourapi.base import TourAPIError, TourAPITimeoutError
 
 logger = get_logger(__name__)
 
@@ -54,10 +64,27 @@ def register_error_handlers(app: FastAPI) -> None:
             headers={"Retry-After": retry_after},
         )
 
+    @app.exception_handler(TourAPITimeoutError)
+    async def _upstream_timeout(request: Request, exc: Exception) -> JSONResponse:
+        """TourAPI 타임아웃·연결 실패 — 일시 장애라 재시도로 풀린다. 503 + Retry-After.
+
+        입력 문제가 아니므로 422로 내보내면 안 된다(앱이 '조건을 바꿔보라'로 오안내).
+        """
+        logger.warning("TourAPI 일시 장애: %s %s — %s", request.method, request.url.path, exc)
+        return JSONResponse(
+            status_code=503,
+            content=_body(CODE_RATE_LIMIT, "관광 정보를 불러오지 못했느니라. 잠시 후 다시 시도해다오."),
+            headers={"Retry-After": retry_after},
+        )
+
+    @app.exception_handler(TourAPIError)
     @app.exception_handler(LLMCallError)
     @app.exception_handler(EmbeddingCallError)
     async def _upstream_failed(request: Request, exc: Exception) -> JSONResponse:
-        """LLM/임베딩 업스트림 실패 — 서버 자체 결함이 아니므로 502."""
+        """LLM/임베딩/TourAPI 업스트림 실패 — 서버 자체 결함이 아니므로 502.
+
+        예외 원문(오퍼레이션명·키 설정 안내 등)은 내부 정보라 로그에만 남긴다.
+        """
         logger.error("업스트림 호출 실패: %s %s — %s", request.method, request.url.path, exc)
         return JSONResponse(
             status_code=502,
