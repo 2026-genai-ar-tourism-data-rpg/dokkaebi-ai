@@ -11,6 +11,7 @@ class DialogueState(TypedDict, total=False):
     """NPC 대화 파이프라인 상태. 그래프의 모든 노드가 이 dict를 읽고 일부를 갱신해 반환."""
 
     node_id: str          # 장소 노드 ID
+    node_name: str        # 장소 표시명 (페르소나 합성 입력)
     region_id: str        # 지역 ID (의미검색 인덱스 선택용)
     stage: str            # 등장 | 의뢰 | 힌트 | 완료
     player_state: dict    # 진행도, 보유 기억석 조각, 이전 대화 요약(멀티턴)

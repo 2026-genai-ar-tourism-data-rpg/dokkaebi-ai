@@ -4,12 +4,18 @@
 # 구현(요약): 공통 호출부(base.request_all) 위 골격만. ⚠️ 서비스명/오퍼레이션/파라미터·
 #            응답 필드는 스펙 미확정 → _SERVICE/_OP/파라미터 확정 후 _to_texts 채울 것.
 # 구현일: 2026-06-18 | 작성: kys (audioguide-client/kys/v1)
+# 조사(2026-08-12, 정찬희): 데이터셋 자체는 실존 확인 — 공공데이터포털
+#   "한국관광공사_관광지 오디오 가이드정보_GW" (dataset id 15101971,
+#   https://www.data.go.kr/data/15101971/openapi.do). 브랜드명 '오디(Odii)'.
+#   단, 정확한 서비스명·오퍼레이션명·파라미터·응답 필드는 그 페이지의 참고문서
+#   "TourAPI_Guide_(오디)v4.1.zip"(포털 로그인 후 다운로드 필요, 웹 검색/fetch로는
+#   내용 확인 불가) 안에만 있어 여전히 미확정 — 그 zip 받아서 _SERVICE/_OP 채울 것.
 # ============================================================
 from app.config import get_settings
 from app.tourapi.base import TourAPIError, request_all
 
-# ⚠️ TODO(스펙 확정): 공공데이터포털 "관광지 오디오가이드" 서비스명·오퍼레이션명
-#    예상 구조 GET {root}/{_SERVICE}/{_OP}. 빅데이터 문서처럼 실제 값 확인 후 교체.
+# ⚠️ TODO(스펙 확정): 위 조사 노트의 TourAPI_Guide_(오디)v4.1.zip 다운로드해 실제 값으로 교체.
+#    예상 구조 GET {root}/{_SERVICE}/{_OP}.
 _SERVICE = ""   # 예: "KorAudioGuideService" (미확정)
 _OP = ""        # 예: "audioGuideList" / "themeBasedList" 등 (미확정)
 

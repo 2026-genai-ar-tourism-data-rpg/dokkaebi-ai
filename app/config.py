@@ -54,7 +54,9 @@ class Settings(BaseSettings):
 
     # --- 의미검색(retrieve 노드) 파라미터 (검색 알고리즘: 박준형) ---
     search_top_k: int = 5               # 코사인 top-k 후보 수
-    search_min_score: float = 0.3       # 최소 유사도(이하 = 무관). 저신뢰 재검색 임계는 박준형 튜닝
+    search_min_score: float = 0.3       # 최소 유사도(이하 = 무관)
+    search_low_confidence_threshold: float = 0.5  # 이 미만이면 쿼리 재작성 후 1회 재검색(튜닝 필요)
+    search_rerank_lexical_weight: float = 0.3     # 재랭킹 블렌드: 코사인*(1-w) + 키워드overlap*w
 
     # --- TourAPI (국문관광정보 — 노드 데이터 원천) ---
     #  service_key 없으면 mock 종로 노드로 구동(거리순 로직 검증)

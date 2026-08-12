@@ -14,13 +14,16 @@ logger = get_logger(__name__)
 _graph = build_graph()
 
 
-async def run_dialogue(node_id: str, stage: str, player_state: dict) -> tuple[str, bool]:
+async def run_dialogue(
+    node_id: str, stage: str, player_state: dict, *, node_name: str = ""
+) -> tuple[str, bool]:
     """[서비스] 대화 그래프를 invoke해 (대사, 캐시히트여부) 반환.
 
     담당: 오케스트레이션 연결 = 김예슬.
     """
     state: DialogueState = {
         "node_id": node_id,
+        "node_name": node_name,
         "stage": stage,
         "player_state": player_state,
     }
