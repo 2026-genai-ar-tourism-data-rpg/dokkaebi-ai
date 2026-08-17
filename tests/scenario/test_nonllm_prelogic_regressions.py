@@ -34,7 +34,7 @@ def test_generate_scenario_uses_start_as_end_when_omitted(monkeypatch):
         return {}
 
     monkeypatch.setattr(generator, "generate_basic_scenario", fake_generate_basic)
-    req = ScenarioRequest(user_id="u", start=LatLng(lat=37.57, lng=126.98))
+    req = ScenarioRequest(user_id="u", start=LatLng(lat=37.57, lng=126.98), region="강남")
     asyncio.run(generator.generate_scenario(req))
 
     assert captured["end_x"] == req.start.lng
@@ -208,6 +208,7 @@ def test_headcount_reaches_food_gating(monkeypatch):
     req = ScenarioRequest(
         user_id="u", start=LatLng(lat=37.570, lng=126.975),
         budget=40_000, headcount=4, with_dialogue=False, with_content=False,
+        region="강남",
     )
     scn = asyncio.run(generator.generate_scenario(req))
 
