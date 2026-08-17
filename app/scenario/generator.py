@@ -93,7 +93,21 @@ def _plan_nodes(route: list[dict]) -> list[dict]:
 async def generate_scenario(req: ScenarioRequest) -> dict:
     """[입력 contract] 사용자 입력(ScenarioRequest) → 시나리오. 서버가 호출하는 진입점.
     transport→반경 자동, end(집)→피날레, wishlist→앵커(생성로직은 추후). 좌표는 앱이 해석해 넘김.
+
+    종로는 고정 정답지 스크립트를 재생하므로 동적 생성을 우회한다(커스터마이징 매개변수 무시).
     """
+    # 종로 정답지 고정 재생 (동적 파이프라인 우회)
+    if req.region == "종로":
+        from app.scenario.jongno_script import generate_jongno_script
+        scn = generate_jongno_script(region="종로")
+        scn["created_by"] = req.user_id
+        scn["budget"] = req.budget
+        scn["headcount"] = req.headcount
+        scn["transport"] = req.transport
+        if req.wishlist:
+            scn["wishlist_content_ids"] = [w.content_id for w in req.wishlist]
+        return scn
+
     s = get_settings()
     radius = req.radius_m or (s.scenario_radius_car_m if req.transport == "car" else s.scenario_radius_walk_m)
     end = req.end or req.start
