@@ -6,6 +6,14 @@
 #            결정: eager(생성시 트리 확정, 유계) — 근거는 docs/route-branching.md.
 #            순수 함수라 LLM/네트워크 없이 단위 테스트 가능(오프라인 결정론).
 # 구현일: 2026-07-14 | 작성: kys (route-branching/kys/v1) · 상위 .github#5
+# ------------------------------------------------------------
+# [v2] 선택지 사본 이중화 정리 — label의 원본을 node.branch 한 곳으로.
+# 구현(요약): 같은 선택지가 node.branch.options(앱 렌더용)와 route_tree.nodes[BP].choices
+#            (간선 계산용)에 통째로 두 벌 있었다. 앱은 앞을, 서버 nextNodeId는 뒤를 읽어
+#            한쪽만 고치면 조용히 갈라진다. **원본 = node.branch**, route_tree는 간선에
+#            필요한 (choice_id, next_node_id)만 갖는 파생 사본으로 좁힌다.
+#            앱·서버 파서는 label 없으면 빈 문자열로 읽으므로 하위호환.
+# 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
 # ============================================================
 from app.core.logger import get_logger
 from app.tourapi.client import haversine_m
@@ -80,13 +88,16 @@ def attach_branch(
         {"choice_id": MAIN_ID, "label": main_label, "next_node_id": m["node_id"]},
         {"choice_id": BRANCH_ID, "label": alt_label, "next_node_id": alt["node_id"]},
     ]
+    # 선택지 원본은 여기 하나. label(표시 문구)은 이 사본에만 산다.
     bp["branch"] = {"prompt": prompt, "options": options}
 
     # 트리 간선: 본선은 선형 next, BP는 choices(+기본 next=M), 샛길 A는 R로 재합류.
+    # choices는 간선 계산용 파생 사본 — 이동에 필요한 두 값만 담는다(표시 문구는 branch에서).
+    edges = [{"choice_id": o["choice_id"], "next_node_id": o["next_node_id"]} for o in options]
     nodes_tree: dict[str, dict] = {}
     for idx, q in enumerate(seq):
         nodes_tree[q["node_id"]] = {"next": seq[idx + 1]["node_id"] if idx + 1 < len(seq) else None}
-    nodes_tree[bp["node_id"]] = {"next": m["node_id"], "choices": options}
+    nodes_tree[bp["node_id"]] = {"next": m["node_id"], "choices": edges}
     nodes_tree[alt["node_id"]] = {"next": r["node_id"]}
 
     seq2 = seq + [alt]

@@ -5,19 +5,26 @@
 #            합성 규칙 = 기획_통합.md §8-B, 프롬프트 = 프롬프트_설계_v0.md §3-D.
 # 구현일: 2026-06-10 | 작성: kys (base-pipeline/kys/v1)
 # 수정일: 2026-08-12 | persona 시드 로드 구현: 정찬희
+# ------------------------------------------------------------
+# [v2] 캐시 키에 프롬프트 버전 삽입 + 공용 LLM 클라이언트 사용.
+# 구현(요약): 키가 `npc:{node}:{stage}`·`persona:{node}`라 프롬프트를 고쳐도 대사 1일·
+#            페르소나 7일 동안 옛 출력이 나갔다(실측). config.prompt_version을 키에 넣어
+#            프롬프트 개정과 캐시 무효화를 한 번에 묶는다.
+# 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
 # ============================================================
 import json
 
+from app.config import get_settings
 from app.core.cache import get_cache
 from app.core.exceptions import LLMCallError
 from app.core.logger import get_logger
-from app.llm.client import LLMClient
+from app.llm.client import get_llm
 from app.pipeline.state import DialogueState
 from app.region.memory_cache import get_region_cache
 
 logger = get_logger(__name__)
 
-_llm = LLMClient()
+_llm = get_llm()
 _PERSONA_TTL_S = 60 * 60 * 24 * 7  # 장소 정보는 정적 → 장기 캐싱(노드당 1회 합성이 목표)
 _FALLBACK_ARCHETYPE = "guardian"  # 모티프 추출 실패 시 기본값(기획_통합.md §16) — 어떤 장소에도 무난
 
@@ -29,14 +36,18 @@ async def persona_inject(state: DialogueState) -> dict:
     """
     node_id = state.get("node_id", "")
     stage = state.get("stage", "등장")
+    version = get_settings().prompt_version
     persona = await _load_persona(node_id, state.get("node_name", ""))
-    return {"persona": persona, "cache_key": f"npc:{node_id}:{stage}"}
+    # 사용자 발화가 있으면 캐시를 쓰지 않는다(빈 키) — 질문이 달라도 같은 대사가 나가면
+    # 되묻는 의미가 없다. 발화 없는 정형 대사(등장·완료 등)만 노드·stage로 캐싱한다.
+    cache_key = "" if state.get("query") else f"npc:{version}:{node_id}:{stage}"
+    return {"persona": persona, "cache_key": cache_key}
 
 
 async def _load_persona(node_id: str, node_name: str) -> dict:
     """persona 시드 로드: 캐시 → (미스) LLM 합성(기획 8-B) → 캐시 저장. 노드당 1회 목표."""
     cache = get_cache()
-    ckey = f"persona:{node_id}"
+    ckey = f"persona:{get_settings().prompt_version}:{node_id}"
     cached = await cache.get(ckey)
     if cached is not None:
         return json.loads(cached)

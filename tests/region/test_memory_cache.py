@@ -10,7 +10,6 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 from app.region.memory_cache import RegionMemoryCache
-from app.scenario.wishlist import WISH_NODE_PREFIX
 from app.tourapi.client import TourAPIError
 
 
@@ -58,17 +57,71 @@ def test_get_text_miss_refetch_failure_returns_none():
 
 
 def test_get_text_skips_refetch_for_non_tour_node():
-    """엣지: 위시 합성 노드(tour_ 접두 아님)는 TourAPI 원본이 없으므로 재조회 시도 안 함."""
+    """엣지: TourAPI 원본이 없는 합성 노드는 재조회를 시도하지 않는다.
+
+    [v3] 위시 노드(wish_<contentId>)는 여기서 제외됐다 — 자동완성에서 확정한 실제
+    contentId를 갖고 있어 상세 조회가 된다(그 전엔 위시 장소만 grounding이 없었다).
+    지금 이 케이스에 해당하는 건 식음(contentTypeId 39, overview 없음)·mock 노드다.
+    """
     cache = RegionMemoryCache(max_regions=2)
-    node_id = f"{WISH_NODE_PREFIX}777"
 
     with patch(
         "app.region.memory_cache._tour.detail_common", new=AsyncMock()
     ) as mock_detail:
-        text = asyncio.run(cache.get_text(node_id))
+        assert asyncio.run(cache.get_text("food_mock_0")) is None   # mock 식음
+        assert asyncio.run(cache.get_text("synthetic")) is None     # 접두 없음
 
-    assert text is None
     mock_detail.assert_not_called()
+
+
+
+# ── [v2] 미스 재조회가 지역 슬롯을 잠식하지 않는지 (dialogue-rework/kys/v1) ──
+def test_refetch_does_not_evict_real_region():
+    """실측 회귀: 재조회가 node_id를 지역 키로 써서 미스 8번이면 진짜 지역이 밀려났다."""
+    cache = RegionMemoryCache(max_regions=8)
+    cache.warm("종로", {"tour_1604697": "세종로공원 원문"})
+
+    with patch(
+        "app.region.memory_cache._tour.detail_common",
+        new=AsyncMock(return_value={"overview": "재조회 원문"}),
+    ):
+        for i in range(10):
+            asyncio.run(cache.get_text(f"tour_90000{i}"))
+
+    keys = list(cache._regions.keys())
+    assert "종로" in keys, "재조회 반복에 진짜 지역 워킹셋이 evict되면 안 된다"
+    assert keys == ["종로", "_orphan"]          # 고아는 버킷 하나만 쓴다
+    assert asyncio.run(cache.get_text("tour_1604697")) == "세종로공원 원문"
+
+
+def test_refetch_uses_given_region():
+    """region_id를 알면 그 지역 워킹셋에 편입한다(고아 버킷을 만들지 않는다)."""
+    cache = RegionMemoryCache(max_regions=8)
+
+    with patch(
+        "app.region.memory_cache._tour.detail_common",
+        new=AsyncMock(return_value={"overview": "원문"}),
+    ):
+        asyncio.run(cache.get_text("tour_1364932", region_id="종로"))
+
+    assert list(cache._regions.keys()) == ["종로"]
+
+
+
+def test_refetch_supports_wishlist_and_food_nodes():
+    """<출처>_<contentId> 규약이면 재조회한다 — 위시 앵커·식음 노드 포함."""
+    cache = RegionMemoryCache(max_regions=8)
+
+    with patch(
+        "app.region.memory_cache._tour.detail_common",
+        new=AsyncMock(return_value={"overview": "경복궁 원문"}),
+    ) as detail:
+        text = asyncio.run(cache.get_text("wish_126508", region_id="종로"))
+        food = asyncio.run(cache.get_text("food_2543919", region_id="종로"))
+
+    assert text == "경복궁 원문"
+    assert food == "경복궁 원문"       # 같은 스텁 — 식음도 조회 대상이라는 뜻
+    assert [c.args[0] for c in detail.await_args_list] == ["126508", "2543919"]
 
 
 def _run_all() -> int:

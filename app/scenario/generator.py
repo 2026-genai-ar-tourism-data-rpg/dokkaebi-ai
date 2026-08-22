@@ -30,6 +30,16 @@
 #              동기 httpx(BigData 최대 40페이지)를 부르기 때문에, 코루틴에서 직접 호출하면
 #              그동안 이벤트 루프가 멈춰 서버의 모든 요청이 대기한다.
 # 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
+# ------------------------------------------------------------
+# [v5] 앱 마법사 입력 실반영 + 종로 우회 조건화.
+# 구현(요약): ① duration→노드 수·반경 / difficulty→트리거 반경·힌트 수 / companion→인원수 /
+#              tags→후보 선호 가중을 preference.py로 번역해 생성에 실제로 먹인다.
+#              (지금까지 앱 3단계 입력 중 서버까지 간 건 transport·wishlist·budget·no_meals뿐)
+#            ② region="auto"면 후보 주소에서 시군구를 유추한다 — 앱이 좌표만 알고 행정구역명을
+#              모르는 탓에 어디서 만들어도 제목·조각 id가 '종로'로 나갔다.
+#            ③ 종로 정답지 고정 재생은 use_fixed_script=True일 때만. region만 보고 우회하면
+#              사용자가 무엇을 골라도 같은 코스가 나온다(#50 회귀).
+# 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
 # ============================================================
 import asyncio
 import hashlib
@@ -39,6 +49,15 @@ from app.core.logger import get_logger
 from app.region.memory_cache import get_region_cache
 from app.scenario.density import density_label
 from app.scenario.node_content import classify_motivations, generate_mission, to_quiz
+from app.scenario.preference import (
+    apply_hint_limit,
+    headcount_for,
+    infer_region,
+    node_count_for,
+    radius_for,
+    rank_by_tags,
+    trigger_radius_for,
+)
 from app.scenario.node_schema import (
     enrich_quest,
     infer_motivations,
@@ -49,6 +68,7 @@ from app.scenario.node_schema import (
 from app.scenario.request import ScenarioRequest
 from app.scenario.route_branching import attach_branch, pick_alternate, select_branch_point, validate_tree
 from app.scenario.route_builder import backfill_dist_m, build_route
+from app.scenario.wishlist import SOURCE_WISHLIST
 from app.services.dialogue_service import run_dialogue
 from app.tourapi.client import TourAPIClient
 from app.tourapi.food import interleave_food_async
@@ -92,49 +112,67 @@ def _plan_nodes(route: list[dict]) -> list[dict]:
 
 async def generate_scenario(req: ScenarioRequest) -> dict:
     """[입력 contract] 사용자 입력(ScenarioRequest) → 시나리오. 서버가 호출하는 진입점.
-    transport→반경 자동, end(집)→피날레, wishlist→앵커(생성로직은 추후). 좌표는 앱이 해석해 넘김.
+    transport→반경 자동, end(집)→피날레, wishlist→앵커. 좌표는 앱이 해석해 넘김.
 
-    종로는 고정 정답지 스크립트를 재생하므로 동적 생성을 우회한다(커스터마이징 매개변수 무시).
+    앱 마법사 입력은 preference.py를 거쳐 생성 파라미터가 된다 —
+    duration→노드 수·반경, companion→인원수, difficulty→트리거 반경·힌트 수, tags→후보 가중.
+    종로 정답지 재생은 use_fixed_script=True인 '명시 요청'일 때만(그 경우 커스터마이징 무시).
     """
-    # 종로 정답지 고정 재생 (동적 파이프라인 우회)
-    if req.region == "종로":
+    # 종로 정답지 고정 재생 — 시연용 명시 요청에 한정(기본은 동적 생성)
+    if req.use_fixed_script and req.region == "종로":
         from app.scenario.jongno_script import generate_jongno_script
         scn = generate_jongno_script(region="종로")
         scn["created_by"] = req.user_id
         scn["budget"] = req.budget
-        scn["headcount"] = req.headcount
+        scn["headcount"] = headcount_for(req.companion, req.headcount)
         scn["transport"] = req.transport
         if req.wishlist:
             scn["wishlist_content_ids"] = [w.content_id for w in req.wishlist]
-        return scn
+        return _with_input_meta(scn, req)
 
     s = get_settings()
-    radius = req.radius_m or (s.scenario_radius_car_m if req.transport == "car" else s.scenario_radius_walk_m)
+    base_radius = req.radius_m or (s.scenario_radius_car_m if req.transport == "car" else s.scenario_radius_walk_m)
+    # 반경은 '요청 반경이 없을 때만' 시간으로 늘린다 — radius_m을 준 호출자의 의도를 덮지 않는다.
+    radius = base_radius if req.radius_m else radius_for(req.duration, base_radius)
+    headcount = headcount_for(req.companion, req.headcount)
     end = req.end or req.start
     scn = await generate_basic_scenario(
         req.start.lng, req.start.lat, region=req.region, radius_m=radius,
+        count=node_count_for(req.duration, s.scenario_node_count),
         with_dialogue=req.with_dialogue, with_content=req.with_content,
         end_x=end.lng if end else None, end_y=end.lat if end else None,
         wishlist=req.wishlist, budget=req.budget, no_meals=req.no_meals,
-        headcount=req.headcount, with_branching=req.with_branching,
+        headcount=headcount, with_branching=req.with_branching,
+        difficulty=req.difficulty, tags=req.tags,
     )
     # 입력 메타 부착(저장·검증용)
     scn["created_by"] = req.user_id
     scn["budget"] = req.budget
-    scn["headcount"] = req.headcount
+    scn["headcount"] = headcount
     scn["transport"] = req.transport
+    scn = _with_input_meta(scn, req)
     # wishlist 앵커 강제포함은 route_builder.build_route(① 단계, 정찬희)가 처리. 여기선 메타만.
     if req.wishlist:
         scn["wishlist_content_ids"] = [w.content_id for w in req.wishlist]
     return scn
 
+def _with_input_meta(scn: dict, req: ScenarioRequest) -> dict:
+    """앱 마법사 입력을 응답에 에코 — 저장·검증용(무엇을 골라 만든 코스인지 남는다)."""
+    scn["duration"] = req.duration
+    scn["companion"] = req.companion
+    scn["difficulty"] = req.difficulty
+    scn["tags"] = list(req.tags or [])
+    return scn
+
+
 async def generate_basic_scenario(
-    map_x: float, map_y: float, *, region: str = "종로",
+    map_x: float, map_y: float, *, region: str = "auto",
     radius_m: int | None = None, count: int | None = None,
     with_dialogue: bool = True, with_content: bool = True,
     end_x: float | None = None, end_y: float | None = None,
     wishlist: list | None = None, budget: int | None = None, no_meals: bool = False,
     headcount: int = 1, with_branching: bool = False,
+    difficulty: str = "normal", tags: list[str] | None = None,
 ) -> dict:
     """[거리순 v0] 가까운 N개 관광지로 '기억석 챕터' 생성 + 장소기반 NPC 대사.
     map_x=경도, map_y=위도. end_x/y 주면 끝점에 가장 가까운 노드를 피날레로.
@@ -142,6 +180,8 @@ async def generate_basic_scenario(
     노드 선택/배열(앵커·비인기·식음)은 route_builder.build_route로 분리 — hook별 오너:
     위시=정찬희 / 비인기=이지선 / 식음=박준형 / 분기·seam=김예슬.
     route에 섞인 식음노드(kind=food/cafe)는 기억석 조각이 아님 → _plan_nodes가 분리.
+    region="auto"면 후보 주소에서 시군구를 유추한다(앱은 좌표만 알고 행정구역명을 모른다).
+    difficulty=트리거 반경·힌트 수, tags=후보 선호 가중 — 둘 다 preference.py가 번역.
     """
     s = get_settings()
     radius_m = radius_m or s.scenario_default_radius_m
@@ -152,6 +192,12 @@ async def generate_basic_scenario(
         raise DokkaebiAIError(f"반경 {radius_m}m 내 관광지 없음 (좌표 {map_x},{map_y})")
     if not nodes:
         logger.warning("반경 내 후보 없음 → 위시 앵커만으로 경로 구성")
+    # 1.2) 지역 라벨 확정 — "auto"면 후보 주소(addr1) 최빈 시군구. 제목·조각 id·캐시 키가 이걸 쓴다.
+    if region in ("auto", "", None):
+        region = infer_region(nodes, fallback="이 지역")
+        logger.info("지역 라벨 자동 판정: %s (후보 %d개 주소 기준)", region, len(nodes))
+    # 1.3) 취향 태그 가중 — 맞는 후보를 앞으로(제외 아님). build_route가 앞에서부터 채운다.
+    nodes = rank_by_tags(nodes, tags)
     # 1.5) 노드 선택/배열 seam — 앵커 강제포함 + 거리순 채우기 + 피날레 + 식음 삽입
     #      build_route는 동기 함수인데 비인기 앵커 hook이 그 안에서 BigData를 동기 httpx로
     #      호출한다(최대 40페이지). 코루틴에서 그냥 부르면 그동안 이벤트 루프 전체가 멈춰
@@ -170,6 +216,14 @@ async def generate_basic_scenario(
         route = await interleave_food_async(route, budget=budget, headcount=headcount)
         # 식음 노드는 build_route의 backfill 이후에 삽입된다 → 여기서 거리를 채운다.
         backfill_dist_m(route, map_x, map_y)
+    # 위시 앵커의 '반경 밖' 표시를 실제 거리로 바로잡는다.
+    #   위시 hook은 origin·반경을 못 받아(dist_m=None) content_id 매칭에 실패하면 무조건
+    #   out_of_radius=True를 찍는다. 그런데 매칭 실패는 반경 밖이라서가 아니라 후보 목록에
+    #   그 content_id가 없어서일 수도 있다 — 실측: 경복궁(30m)이 '반경 밖'으로 표시됐고,
+    #   앱은 이 값으로 "위치 부정확" 경고를 띄운다. 거리를 아는 여기서 정정한다.
+    for node in route:
+        if node.get("source") == SOURCE_WISHLIST and isinstance(node.get("dist_m"), (int, float)):
+            node["out_of_radius"] = node["dist_m"] > radius_m
     # 노드 역할 메타(조각 번호·피날레·식음 분리). total은 '관광 노드'만 셈.
     metas = _plan_nodes(route)
     stone_total = metas[0]["stone_total"] if metas else 0
@@ -199,6 +253,8 @@ async def generate_basic_scenario(
         missions = await asyncio.gather(
             *[_content_for(n, m, mv) for n, m, mv in zip(route, metas, motivations_list)]
         )
+        # 난이도 → 노출 힌트 개수(쉬움 3 / 보통 2 / 어려움 1). 생성은 그대로 두고 노출만 줄인다.
+        missions = [apply_hint_limit(m, difficulty) for m in missions]
     else:
         missions = [None] * len(route)
     logger.info("거리순 시나리오: 후보 %d → 관광 %d조각 + 식음 %d (반경 %dm, 대사=%s, 미션=%s)",
@@ -206,9 +262,11 @@ async def generate_basic_scenario(
                 "LLM" if with_dialogue else "고정",
                 "/".join(m["type"] for m in missions if m) if with_content else "OFF")
     # 5) 퀘스트 조립 — order=방문 순서(식음 포함), fragment는 관광 노드만
+    trigger_m = trigger_radius_for(difficulty)     # 난이도 → GPS 도착 인증 반경
     node_sequence = [
         _build_quest(n, i, metas[i], region, dialogues[i],
-                     mission=missions[i], motivations=motivations_list[i])
+                     mission=missions[i], motivations=motivations_list[i],
+                     trigger_radius_m=trigger_m)
         for i, n in enumerate(route)
     ]
     finale_id = next((q["node_id"] for q in reversed(node_sequence) if q["is_finale"]),
@@ -221,6 +279,7 @@ async def generate_basic_scenario(
         node_sequence, route_tree = await _apply_branching(
             node_sequence, route, nodes, region,
             with_dialogue=with_dialogue, with_content=with_content,
+            difficulty=difficulty, trigger_radius_m=trigger_m,
         )
         is_branching = route_tree is not None
     node_sequence = link_state_graph(node_sequence)
@@ -240,6 +299,7 @@ async def generate_basic_scenario(
 async def _apply_branching(
     node_sequence: list[dict], route: list[dict], candidates: list[dict], region: str, *,
     with_dialogue: bool, with_content: bool,
+    difficulty: str = "normal", trigger_radius_m: int = 100,
 ) -> tuple[list[dict], dict | None]:
     """본선 node_sequence에 갈림길 1곳을 얹어 다이아몬드 트리로 만든다(재합류).
     ① 분기 노드 선택 → ② 예비 후보에서 샛길 노드 픽 → ③ 샛길 노드 콘텐츠(대사·미션) 생성
@@ -264,8 +324,10 @@ async def _apply_branching(
     alt_dialogue = await _dialogue_for(alt_src, alt_meta) if with_dialogue else _fixed(alt_src, alt_meta)
     alt_motivations = await _motivations_for(alt_src, alt_meta)   # [v3] 동기 → 미션 타입 순서 유지
     alt_mission = await _content_for(alt_src, alt_meta, alt_motivations) if with_content else None
+    alt_mission = apply_hint_limit(alt_mission, difficulty)     # 샛길도 같은 난이도 규칙
     alt_quest = _build_branch_quest(alt_src, len(node_sequence), region, alt_dialogue,
-                                    alt_mission, motivations=alt_motivations)
+                                    alt_mission, motivations=alt_motivations,
+                                    trigger_radius_m=trigger_radius_m)
     seq2, tree = attach_branch(node_sequence, bp_i, alt_quest)
     try:
         validate_tree(tree)                    # 무결성·수렴 방어 — 깨진 트리는 선형 폴백
@@ -293,7 +355,11 @@ async def _dialogue_for(node: dict, meta: dict) -> str:
     """대화 그래프로 장소기반 대사 생성. 식음=요기 권유, 관광=등장/완료. 실패 시 고정 대사 폴백."""
     stage = "식음" if meta["is_food"] else ("완료" if meta["is_finale"] else "등장")
     try:
-        text, _hit = await run_dialogue(node["node_id"], stage, {})
+        # node_name을 넘기지 않으면 프롬프트의 장소명·페르소나 이름이 node_id가 된다
+        # (실측: "너는 'tour_1604697'을(를) 수호하는 도깨비 NPC 'tour_1604697 도깨비'다").
+        text, _hit = await run_dialogue(
+            node["node_id"], stage, {}, node_name=node.get("name") or "",
+        )
         return text or _fixed(node, meta)
     except Exception as e:  # LLM 오류 등 → 시나리오 생성 자체는 막지 않음
         logger.warning("노드 %s 대사 생성 실패 → 고정 대사: %s", node.get("node_id"), e)
@@ -350,14 +416,15 @@ def _run_qa_log(quest: dict, node: dict) -> None:
 
 
 def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
-                 mission: dict | None = None, motivations: list | None = None) -> dict:
+                 mission: dict | None = None, motivations: list | None = None,
+                 trigger_radius_m: int = 100) -> dict:
     """노드 1개 → 퀘스트 1개. order=방문 순서(식음 포함). 식음노드는 경유/보상 퀘스트로 분기.
 
     관광 노드: 도착→NPC대사→미션(타입별)→기억석 조각1→다음, 마지막=피날레(fragment_id 부여).
     식음 노드: 대사만(요기 권유)+쿠폰. 기억석 미션·fragment_id 없음 → 조각으로 오인 안 됨.
     """
     if meta["is_food"]:
-        return _build_food_quest(node, order, dialogue)
+        return _build_food_quest(node, order, dialogue, trigger_radius_m=trigger_radius_m)
     objective = None
     quiz = None
     if mission:
@@ -376,7 +443,7 @@ def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
         "mission": mission,      # 타입별 미션(생성 시 1회). 핵심: 노드마다 다른 종류
         "quiz": quiz,            # 앱 호환: 질문형이면 채워짐, 아니면 None
         "objective": objective,  # AR 지령 + 단계 힌트(모든 타입 공통)
-        "trigger_radius_m": 100,                         # 개방공간 기본(노드 상세 붙으면 교체)
+        "trigger_radius_m": trigger_radius_m,            # 난이도별(노드 상세 붙으면 교체)
         "stone_no": meta["stone_no"],                    # 기억석 조각 번호(1-base)
         "fragment_id": f"{region}_stone_{meta['stone_no']}of{meta['stone_total']}",
         "npc_dialogue": dialogue,
@@ -386,7 +453,7 @@ def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
     _run_qa_log(enriched, node)
     return enriched
 
-def _build_food_quest(node: dict, order: int, dialogue: str) -> dict:
+def _build_food_quest(node: dict, order: int, dialogue: str, trigger_radius_m: int = 100) -> dict:
     """식음(카페·식당) 경유 퀘스트. 기억석 아님 — fragment_id/미션 없음, 쿠폰·가격밴드만."""
     quest = {
         "order": order,
@@ -403,7 +470,7 @@ def _build_food_quest(node: dict, order: int, dialogue: str) -> dict:
         "mission": None,
         "quiz": None,
         "objective": None,
-        "trigger_radius_m": 100,
+        "trigger_radius_m": trigger_radius_m,
         "fragment_id": None,                             # ★ 기억석 조각 아님
         "npc_dialogue": dialogue,
         "is_finale": False,
@@ -411,7 +478,8 @@ def _build_food_quest(node: dict, order: int, dialogue: str) -> dict:
     return enrich_quest(quest, node)
 
 def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
-                        mission: dict | None = None, motivations: list | None = None) -> dict:
+                        mission: dict | None = None, motivations: list | None = None,
+                        trigger_radius_m: int = 100) -> dict:
     """샛길(분기 대안) 관광 퀘스트. 본선 M의 대안이라 stone_no 없음·total에 안 잡힘.
     관광 노드와 동일한 플레이(도착→대사→미션→조각) — 단 fragment는 분기 전용 id.
     실제 방문 순서는 route_tree가 정의(order는 안정 인덱스일 뿐).
@@ -434,7 +502,7 @@ def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
         "mission": mission,
         "quiz": quiz,
         "objective": objective,
-        "trigger_radius_m": 100,
+        "trigger_radius_m": trigger_radius_m,
         "stone_no": None,                                # 조각 번호 없음(본선 대안)
         "fragment_id": f"{region}_branch_b1",
         "npc_dialogue": dialogue,
