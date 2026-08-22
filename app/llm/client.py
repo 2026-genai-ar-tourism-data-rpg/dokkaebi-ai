@@ -5,6 +5,14 @@
 #            ③429(LLMRateLimitError) 지수 백오프+jitter 재시도.
 #            provider 선택은 _build_provider 한 곳에서만(=교체 지점). mock/upstage/openai 연결.
 # 구현일: 2026-06-10 | 작성: kys (base-pipeline/kys/v1)
+# ------------------------------------------------------------
+# [v2] 공용 싱글톤(get_llm) 추가 — 세마포어가 인스턴스마다 따로 생기던 것 수정.
+# 구현(요약): 모듈 5곳이 각자 `LLMClient()`를 만들어 세마포어가 5개 존재했다
+#            (generate·persona_inject·retrieve·node_content·branching_service).
+#            llm_semaphore=8이 인스턴스당 값이라 실제 동시 호출 상한이 최대 40이었고,
+#            429가 나도 원인이 설정값에서 안 보였다. 핫패스는 전부 get_llm()을 쓴다.
+#            테스트용 provider 주입은 그대로 LLMClient(provider=...)로 가능.
+# 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
 # ============================================================
 import asyncio
 import random
@@ -84,3 +92,18 @@ class LLMClient:
                     "LLM 429 → %.2fs 후 재시도 (%d/%d)", delay, attempt, self._max_retries
                 )
                 await asyncio.sleep(delay)
+
+
+_client: LLMClient | None = None
+
+
+def get_llm() -> LLMClient:
+    """공용 LLM 클라이언트 싱글톤(프로세스당 1개 = 세마포어도 1개).
+
+    핫패스는 반드시 이걸 쓴다. 모듈마다 LLMClient()를 새로 만들면 config.llm_semaphore가
+    인스턴스당 값이 되어 동시 호출 상한이 인스턴스 수만큼 곱해진다.
+    """
+    global _client
+    if _client is None:
+        _client = LLMClient()
+    return _client

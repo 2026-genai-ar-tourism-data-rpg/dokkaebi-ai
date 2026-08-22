@@ -4,7 +4,13 @@
 # 구현(요약): npc_dialogue_v1 템플릿(기획_통합.md §13-B)으로 persona·grounding·상태 조립.
 # 구현일: 2026-06-10 | 작성: kys (base-pipeline/kys/v1)
 # 수정일: 2026-08-12 | npc_dialogue_v1 템플릿 적용: 정찬희
+# ------------------------------------------------------------
+# [v2] 진행상황을 dict 그대로 넣던 것 → 사람 말로. (core.wording 공용)
+# 구현(요약): `- 사용자 진행상황: {}` 처럼 파이썬 dict가 그대로 프롬프트에 들어가
+#            내부 키·id가 대사로 샐 수 있었다. 분기 대화와 같은 변환기를 쓴다.
+# 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
 # ============================================================
+from app.core.wording import progress_line
 from app.pipeline.state import DialogueState
 
 
@@ -32,7 +38,7 @@ async def prompt_assemble(state: DialogueState) -> dict:
         f'- 2~4문장. 도깨비 말투(어미 "~니라/~겠느냐", 감탄 "허허") 유지.\n'
         f"- 사용자 진행 단계({state.get('stage', '등장')})에 맞는 대사만: 등장 / 의뢰 / 힌트 / 완료.\n\n"
         f"[컨텍스트]\n"
-        f"- 사용자 진행상황: {state.get('player_state', {})}"
+        f"- 사용자 진행상황: {progress_line(state.get('player_state'))}"
         f"   - 사용자 발화: {state.get('query', '')}"
     )
     return {"prompt": prompt}

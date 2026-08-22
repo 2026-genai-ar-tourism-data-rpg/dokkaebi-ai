@@ -5,10 +5,16 @@
 #            JSON 파싱 실패 fallback, 3가지를 plain assert로 검증.
 #            pytest 없이도 실행: `PYTHONPATH=. python tests/pipeline/test_persona_inject.py`
 # 구현일: 2026-08-12 | 작성: 정찬희
+# ------------------------------------------------------------
+# [v2] 캐시 키에 프롬프트 버전이 들어가는 계약 반영(dialogue-rework/kys/v1).
+#      버전 문자열을 리터럴로 박지 않는다 — 프롬프트를 고칠 때마다 올릴 값이라
+#      박아 두면 개정할 때마다 테스트가 같이 깨진다.
+# 구현일: 2026-08-19 | 작성: kys
 # ============================================================
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.config import get_settings
 from app.core.cache import MemoryCache
 from app.core.exceptions import LLMCallError
 from app.pipeline.nodes.persona_inject import persona_inject
@@ -39,7 +45,8 @@ def test_synthesize_success_and_cached_on_second_call():
 
     assert first["persona"]["archetype"] == "persona"
     assert first["persona"]["motif"] == "세종대왕"
-    assert first["cache_key"] == "npc:tour_1:등장"
+    # 프롬프트를 고치면 이 버전이 올라가고, 그 순간 옛 대사 캐시가 통째로 무효화된다.
+    assert first["cache_key"] == f"npc:{get_settings().prompt_version}:tour_1:등장"
     assert second["persona"] == first["persona"]
     mock_llm.assert_called_once()  # 두 번째 호출은 캐시에서 서빙
 

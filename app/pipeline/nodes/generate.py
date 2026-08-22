@@ -4,11 +4,12 @@
 # 구현(요약): 공용 LLMClient(세마포어+429 백오프 내장)로 prompt -> response
 # 구현일: 2026-06-10 | 작성: kys (base-pipeline/kys/v1)
 # ============================================================
-from app.llm.client import LLMClient
+from app.core.wording import clean_line
+from app.llm.client import get_llm
 from app.pipeline.state import DialogueState
 
 # 핫패스 공용 클라이언트 (세마포어/백오프는 LLMClient 내부에서 처리)
-_llm = LLMClient()
+_llm = get_llm()
 
 
 async def generate(state: DialogueState) -> dict:
@@ -19,4 +20,5 @@ async def generate(state: DialogueState) -> dict:
     """
     prompt = state.get("prompt", "")
     response = await _llm.generate(prompt)
-    return {"response": response}
+    # 마크업을 여기서 걷어낸다 — 이 값이 그대로 캐시에 굳고 앱 Text로 그려진다.
+    return {"response": clean_line(response)}

@@ -76,3 +76,30 @@
 - [x] 분기 route 생성·플레이 1케이스 동작 → `test_branching` (두 갈래 traverse가 각각
       `main`/`b1`을 지나 **공통 재합류 노드**에 도달) + 라이브 생성 E2E.
 - [x] eager/lazy 결정 근거 문서 → 본 문서 §2.
+
+---
+
+## 7. [v2] 갈림길은 대화가 묻는다 (2026-08-19 · `dialogue-rework/kys/v1`)
+
+2026-08-18 실측에서 드러난 것: **선택이 두 축으로 갈라져 있었다.** 경로 선택
+(`main`/`b1`, 코드가 만든 고정 문구)은 지도 시트에서 고르고, 대화 선택(`c0`/`c1`/`collect`,
+LLM 생성)은 플레이 화면에서 골랐다. 도깨비는 갈림길이 있다는 사실 자체를 몰랐고,
+앱이 고른 갈래는 서버로 가지 않아 `quest_runs.choices`가 늘 비어 있었다.
+
+### 바뀐 계약
+- 앱이 대화 요청에 `branch`(=`node_sequence[BP].branch`)를 실어 보낸다.
+  AI는 시나리오를 들고 있지 않으므로(무상태) 이걸 받아야 갈림길을 인지한다.
+- 갈림길 노드에서 대화의 **종료 선택지 id = 갈래 id(`main`/`b1`)**.
+  앱은 그 값을 그대로 `POST /runs/{runId}/nodes/{nodeId}/complete`의 `choice_id`로 넘긴다.
+- 갈림길 노드는 깊이상한(`max_dialogue_turns`)에서 종료하지 않는다 — 잡담만 끝내고
+  길 선택만 남긴다. 선택이 없으면 다음 노드를 정할 수 없기 때문.
+- 지도 시트는 **폴백**으로만 남는다(대화가 실패해 선택을 못 받은 경우).
+
+### 선택지 사본의 원본
+같은 선택지가 두 곳에 있었다(`node.branch.options` / `route_tree.nodes[BP].choices`).
+앱은 앞을, 서버 `nextNodeId`는 뒤를 읽어 한쪽만 고치면 조용히 갈라진다.
+
+- **원본 = `node.branch`** — 표시 문구(`label`)는 여기에만 산다.
+- `route_tree.nodes[BP].choices`는 **간선 계산용 파생 사본** — `choice_id`·`next_node_id`만.
+
+앱·서버 파서 모두 `label` 부재를 빈 문자열로 읽으므로 하위호환이다.

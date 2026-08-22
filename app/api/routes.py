@@ -6,6 +6,9 @@
 # ------------------------------------------------------------
 # [v2] headcount(인원수)를 ScenarioRequest로 전달 — 식음 예산 게이팅 배선(기본 1).
 # 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
+# ------------------------------------------------------------
+# [v3] 앱 마법사 입력(duration·companion·difficulty·tags·use_fixed_script) 전달.
+# 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
 # ============================================================
 from fastapi import APIRouter
 
@@ -43,7 +46,9 @@ async def dialogue_turn(req: DialogueTurnRequest) -> DialogueTurnResponse:
     out = await run_branching(
         node_id=req.node_id, node_name=req.node_name, region_id=req.region_id,
         history=req.history, inventory=req.inventory, last_choice=req.last_choice,
-        turn=req.turn, fragment_id=req.fragment_id,
+        turn=req.turn, fragment_id=req.fragment_id, player_state=req.player_state,
+        kind=req.kind,
+        branch=req.branch.model_dump() if req.branch else None,
     )
     return DialogueTurnResponse(**out)
 
@@ -62,6 +67,11 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         headcount=req.headcount,
         no_meals=req.no_meals,
         region=req.region,
+        duration=req.duration,
+        companion=req.companion,
+        difficulty=req.difficulty,
+        tags=list(req.tags),
+        use_fixed_script=req.use_fixed_script,
         with_dialogue=req.with_dialogue,
         with_content=req.with_content,
         with_branching=req.with_branching,

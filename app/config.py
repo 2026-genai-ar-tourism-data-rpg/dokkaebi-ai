@@ -71,7 +71,15 @@ class Settings(BaseSettings):
     tourapi_timeout: float = 10.0
 
     # --- 분기 대화 (찐 RPG, 기획 8-D) ---
-    max_dialogue_turns: int = 3          # 노드당 대화 깊이 상한(초과 시 조각 획득으로 수렴)
+    max_dialogue_turns: int = 3          # 노드당 대화 깊이 상한(초과 시 의뢰 수령으로 수렴)
+    dialogue_history_turns: int = 6      # 프롬프트에 넣을 최근 대화 줄 수(글자수로 자르면 문장이 깨짐)
+
+    # --- 프롬프트 버전 (캐시 키에 박히는 값) ---
+    #  ⚠️ 프롬프트·템플릿을 고치면 **반드시** 올릴 것. 캐시 키에 이 값이 없으면
+    #     대사는 cache_ttl_s(1일), 페르소나는 7일 동안 옛 출력이 계속 나간다
+    #     ("고쳤는데 왜 그대로냐"의 원인). 올린 직후 첫 요청은 전 노드 재생성이라
+    #     LLM 호출이 몰린다 → 시연 직전에 올리지 말고 미리 한 번 데워 둘 것.
+    prompt_version: str = "v2"
 
     # --- 시나리오 생성 (거리순 v0) ---
     scenario_content_type_id: int = 12   # 12=관광지 (식당39 등은 나중)

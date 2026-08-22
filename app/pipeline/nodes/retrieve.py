@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.core.exceptions import LLMCallError
 from app.core.logger import get_logger
 from app.embeddings.client import EmbeddingClient
-from app.llm.client import LLMClient
+from app.llm.client import get_llm
 from app.pipeline.state import DialogueState
 from app.region.memory_cache import get_region_cache
 from app.region.semantic_index import get_region_index
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 # 핫패스 공용 클라이언트 (세마포어/백오프는 각 클라이언트 내부에서 처리)
 _embed = EmbeddingClient()
-_llm = LLMClient()
+_llm = get_llm()
 
 _WORD_RE = re.compile(r"[\w가-힣]+")
 
