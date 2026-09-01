@@ -10,6 +10,8 @@
 # [v3] 앱 마법사 입력(duration·companion·difficulty·tags·use_fixed_script) 전달.
 # 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
 # ============================================================
+import asyncio
+
 from fastapi import APIRouter
 
 from app.api.schemas import (
@@ -95,21 +97,38 @@ async def search(keyword: str, content_type_id: int = 12, top_n: int = 8) -> Sea
     ])
 
 
+def _one_line_summary(overview: str | None, max_len: int = 60) -> str | None:
+    """개요 텍스트를 카드용 한 줄 요약으로 자른다 — 첫 문장 우선, 길면 글자수로 자름."""
+    if not overview:
+        return None
+    text = " ".join(overview.split())
+    period = text.find(". ")
+    head = text[: period + 1] if 0 <= period < max_len else text
+    return head[:max_len].rstrip() + ("…" if len(head) > max_len else "")
+
+
 @router.get("/nearby", response_model=NearbyResponse)
 async def nearby(lat: float, lng: float, radius_m: int = 2000, top_n: int = 20) -> NearbyResponse:
     """[엔드포인트] 내 주변 POI 목록(거리순) — "내 주변 탐험" 탭.
 
     시나리오 생성(/scenarios)과 달리 LLM·경로계산을 타지 않아 즉시 응답한다.
     앱은 이 목록에서 한 곳을 골라 그 자리에서 바로 AR 탐색에 들어간다.
+    설명(summary)은 detailCommon2 캐시를 재사용(_overview_for와 동일 패턴) — 병렬 호출,
+    캐시 히트면 TourAPI 재호출 없음.
     """
     nodes = await _tour.location_based_list(lng, lat, radius_m)
+    nodes = nodes[:top_n]
+    details = await asyncio.gather(
+        *[_tour.detail_common(n.get("tour_content_id")) for n in nodes]
+    )
     return NearbyResponse(places=[
         NearbyPlace(
             node_id=str(n.get("node_id")), name=n.get("name"),
             addr=n.get("addr1"), lat=n.get("map_y"), lng=n.get("map_x"),
             dist_m=n.get("dist_m"), category=n.get("category") or "other",
+            summary=_one_line_summary((d or {}).get("overview")),
         )
-        for n in nodes[:top_n]
+        for n, d in zip(nodes, details)
     ])
 
 

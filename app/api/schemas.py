@@ -167,6 +167,8 @@ class NearbyPlace(BaseModel):
     # historic | museum | artwork | viewpoint | park | attraction | other
     # 앱이 아이콘·필터칩에 그대로 쓴다(osm._category_of가 이 6종으로 좁힌다).
     category: str = "other"
+    # 장소 설명 한 줄 요약(TourAPI detailCommon2 overview 앞부분). 없으면 None.
+    summary: str | None = None
 
 
 class NearbyResponse(BaseModel):
