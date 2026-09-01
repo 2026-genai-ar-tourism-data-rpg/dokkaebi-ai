@@ -153,3 +153,22 @@ class SearchCandidate(BaseModel):
 class SearchResponse(BaseModel):
     """관광지 이름 검색 결과(정확 일치 우선 정렬)."""
     candidates: list[SearchCandidate]
+
+
+# --- 내 주변 탐험 (좌표 기반 POI 목록) ---
+class NearbyPlace(BaseModel):
+    """내 주변 POI 1개 — 코스 생성 없이 그 자리에서 바로 탐색할 수 있는 지점."""
+    node_id: str
+    name: str | None = None
+    addr: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    dist_m: float | None = None
+    # historic | museum | artwork | viewpoint | park | attraction | other
+    # 앱이 아이콘·필터칩에 그대로 쓴다(osm._category_of가 이 6종으로 좁힌다).
+    category: str = "other"
+
+
+class NearbyResponse(BaseModel):
+    """현재 위치 반경 내 POI(거리순). 시나리오 생성과 달리 LLM을 타지 않아 즉시 응답."""
+    places: list[NearbyPlace]
