@@ -70,6 +70,27 @@ class Settings(BaseSettings):
     tourapi_mobile_app: str = "dokkaebi"
     tourapi_timeout: float = 10.0
 
+    # --- OSM (키리스 실데이터 폴백 — TourAPI 키 없을 때 POI·검색 원천) ---
+    #  Overpass(반경 POI)·Nominatim(키워드 검색) 공개 인스턴스. 상용 트래픽 금지·
+    #  User-Agent 필수(정책). 캐시로 호출 최소화 — Nominatim은 1req/s 제한.
+    # ⚠️ **전역 커버리지 미러만 넣을 것.** overpass.osm.ch는 0.9s로 가장 빨라 1순위로
+    #   뒀다가 걸렸다 — 스위스 전용 DB라 한국 쿼리에 200 + 빈 결과를 준다(실측:
+    #   한국 0건 / 취리히 20건). 200이라 페일오버도 안 걸려 조용히 빈 코스가 된다.
+    #   osm.py가 "빈 결과도 실패로 간주"해 다음 미러로 넘기지만, 애초에 넣지 말 것.
+    # ⚠️ 한때 미러가 동시에 전부 죽어 시나리오 생성이 500으로 막힌 적이 있다
+    #   → 전부 실패해도 Nominatim 폴백(osm.py)이 받아 코스는 만들어진다.
+    osm_overpass_urls: str = (
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter,"
+        "https://overpass-api.de/api/interpreter,"
+        "https://overpass.kumi.systems/api/interpreter"
+    )
+    osm_nominatim_url: str = "https://nominatim.openstreetmap.org/search"
+    # 미러당 타임아웃 — 짧게 잡고 빨리 다음 미러로(전 미러 대기가 사용자 체감 지연).
+    osm_timeout: float = 8.0
+    # POI는 거의 정적 → 길게. 미러가 다 죽어도 캐시가 있으면 그 좌표는 계속 돈다.
+    osm_cache_ttl_s: int = 86400
+    osm_user_agent: str = "dokkaebi-ai/0.1 (dev; contact: team)"
+
     # --- 분기 대화 (찐 RPG, 기획 8-D) ---
     max_dialogue_turns: int = 3          # 노드당 대화 깊이 상한(초과 시 의뢰 수령으로 수렴)
     dialogue_history_turns: int = 6      # 프롬프트에 넣을 최근 대화 줄 수(글자수로 자르면 문장이 깨짐)

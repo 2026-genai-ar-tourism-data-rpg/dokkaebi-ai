@@ -11,8 +11,8 @@ import math
 from app.config import get_settings
 from app.core.cache import get_cache
 from app.core.logger import get_logger
+from app.tourapi import osm
 from app.tourapi.base import TourAPIError, request  # noqa: F401 (TourAPIError 재노출)
-from app.tourapi.mock_nodes import mock_nodes
 
 logger = get_logger(__name__)
 
@@ -48,8 +48,8 @@ class TourAPIClient:
         키 없으면 mock 노드를 같은 형태로(거리계산·정렬) 반환.
         """
         if not self._key:
-            logger.info("TourAPI 키 없음 → mock 종로 노드 사용")
-            return self._mock_location_based(map_x, map_y, radius_m)
+            logger.info("TourAPI 키 없음 → OSM(Overpass) 실데이터 사용")
+            return await osm.location_based(map_x, map_y, radius_m, rows=rows)
 
         result = await request(self._base, "locationBasedList2", {
             "numOfRows": rows,
@@ -68,8 +68,10 @@ class TourAPIClient:
         앱은 이 후보를 드롭다운으로 → 사용자가 탭. 정확 title 일치를 맨 앞으로 정렬.
         반환: [{node_id, tour_content_id, name, addr, map_x, map_y}]
         """
-        if not self._key or not keyword:
+        if not keyword:
             return []
+        if not self._key:
+            return await osm.search_keyword(keyword, top_n=top_n)
         result = await request(self._base, "searchKeyword2", {
             "keyword": keyword, "contentTypeId": content_type_id, "numOfRows": top_n,
         })
@@ -127,18 +129,11 @@ class TourAPIClient:
                 "map_x": float(it["mapx"]) if it.get("mapx") else None,
                 "map_y": float(it["mapy"]) if it.get("mapy") else None,
                 "content_type_id": int(it.get("contenttypeid", 0)),
+                # TourAPI는 OSM 같은 세부 태그가 없다 → 앱 계약을 맞추기 위한 기본값.
+                # (앱은 category로 아이콘·필터를 고르므로 필드가 비면 안 된다.)
+                "category": "attraction",
                 "addr1": it.get("addr1"), "addr2": it.get("addr2"),
                 "dist_m": round(float(it["dist"]), 1) if it.get("dist") else None,
                 "source": "TourAPI",
             })
         return nodes
-
-    def _mock_location_based(self, map_x: float, map_y: float, radius_m: int) -> list[dict]:
-        """mock 노드를 쿼리 좌표 기준 거리계산 → 반경 필터 → 거리순 정렬(실호출과 동일 형태)."""
-        out = []
-        for n in mock_nodes():
-            d = haversine_m(map_y, map_x, n["map_y"], n["map_x"])
-            if d <= radius_m:
-                out.append({**n, "dist_m": round(d, 1)})
-        out.sort(key=lambda x: x["dist_m"])
-        return out

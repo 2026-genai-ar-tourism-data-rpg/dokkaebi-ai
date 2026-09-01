@@ -17,6 +17,8 @@ from app.api.schemas import (
     DialogueResponse,
     DialogueTurnRequest,
     DialogueTurnResponse,
+    NearbyPlace,
+    NearbyResponse,
     ScenarioGenRequest,
     ScenarioGenResponse,
     SearchCandidate,
@@ -90,6 +92,24 @@ async def search(keyword: str, content_type_id: int = 12, top_n: int = 8) -> Sea
             addr=c.get("addr"), lat=c.get("map_y"), lng=c.get("map_x"),
         )
         for c in cands
+    ])
+
+
+@router.get("/nearby", response_model=NearbyResponse)
+async def nearby(lat: float, lng: float, radius_m: int = 2000, top_n: int = 20) -> NearbyResponse:
+    """[엔드포인트] 내 주변 POI 목록(거리순) — "내 주변 탐험" 탭.
+
+    시나리오 생성(/scenarios)과 달리 LLM·경로계산을 타지 않아 즉시 응답한다.
+    앱은 이 목록에서 한 곳을 골라 그 자리에서 바로 AR 탐색에 들어간다.
+    """
+    nodes = await _tour.location_based_list(lng, lat, radius_m)
+    return NearbyResponse(places=[
+        NearbyPlace(
+            node_id=str(n.get("node_id")), name=n.get("name"),
+            addr=n.get("addr1"), lat=n.get("map_y"), lng=n.get("map_x"),
+            dist_m=n.get("dist_m"), category=n.get("category") or "other",
+        )
+        for n in nodes[:top_n]
     ])
 
 
