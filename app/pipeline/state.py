@@ -25,3 +25,4 @@ class DialogueState(TypedDict, total=False):
     response: str         # NPC 대사 / 힌트 (최종 출력)
     cache_key: str        # 대사 캐시 키
     cache_hit: bool       # 캐시 히트 여부 (히트 시 LLM 스킵)
+    qa_feedback: str      # (A1 QA 재생성) 직전 대사가 QA를 통과 못한 이유 — 있으면 캐시 우회
