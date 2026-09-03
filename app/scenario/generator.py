@@ -40,6 +40,18 @@
 #            ③ 종로 정답지 고정 재생은 use_fixed_script=True일 때만. region만 보고 우회하면
 #              사용자가 무엇을 골라도 같은 코스가 나온다(#50 회귀).
 # 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
+# ------------------------------------------------------------
+# [v6] 생성 QA 대응 루프(A1) + 미션 생성 실패 1회 재시도 — 조용한 폴백 제거.
+# 구현(요약): ① _run_qa_log(경고만 찍고 그대로 내보냄)를 qa_graph의 LangGraph 루프로
+#              교체 — QA 실패 시 원인이 된 출력만 재생성(정답유출=미션/힌트, 말투·환각=대사)
+#              하고 다시 QA. 최대 scenario_qa_max_regen회, 그래도 안 되면 결과를 죽이지 말고
+#              qa_flags에 사유를 남긴다.
+#            ② 미션 생성(LLM/JSON) 실패가 안에서 제네릭 미션으로 둔갑해 상위가 몰랐다
+#              → generate_mission이 예외를 올리고, 여기서 1회(설정) 재시도 후에도 실패하면
+#              기존 제네릭 폴백을 쓰되 qa_flags에 "<장소명>: 미션 생성 실패 → 제네릭 미션
+#              폴백"을 남긴다. 폴백 자체는 그대로 — 조용함만 없앤다.
+#            ⚠️ 여기 재시도/재생성은 LLMClient의 429 백오프 재시도와 다른 층이다.
+# 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import asyncio
 import hashlib
@@ -48,7 +60,12 @@ from app.core.exceptions import DokkaebiAIError
 from app.core.logger import get_logger
 from app.region.memory_cache import get_region_cache
 from app.scenario.density import density_label
-from app.scenario.node_content import classify_motivations, generate_mission, to_quiz
+from app.scenario.node_content import (
+    classify_motivations,
+    generate_mission,
+    generic_mission,
+    to_quiz,
+)
 from app.scenario.preference import (
     apply_hint_limit,
     headcount_for,
@@ -62,9 +79,9 @@ from app.scenario.node_schema import (
     enrich_quest,
     infer_motivations,
     link_state_graph,
-    run_qa,
     select_mission_type,
 )
+from app.scenario.qa_graph import run_qa_loop
 from app.scenario.request import ScenarioRequest
 from app.scenario.route_branching import attach_branch, pick_alternate, select_branch_point, validate_tree
 from app.scenario.route_builder import backfill_dist_m, build_route
@@ -248,10 +265,12 @@ async def generate_basic_scenario(
     motivations_list = await asyncio.gather(
         *[_motivations_for(n, m) for n, m in zip(route, metas)]
     )
+    # 생성 중 발생한 사람이 읽을 문제(미션 폴백·QA 미해결)를 모아 응답으로 내보낸다.
+    qa_flags: list[str] = []
     # 노드마다 미션 타입을 다양화: 동기가 허용하는 전략의 미션만 순환 배정. 식음노드는 미션 없음(None)
     if with_content:
         missions = await asyncio.gather(
-            *[_content_for(n, m, mv) for n, m, mv in zip(route, metas, motivations_list)]
+            *[_content_for(n, m, mv, qa_flags) for n, m, mv in zip(route, metas, motivations_list)]
         )
         # 난이도 → 노출 힌트 개수(쉬움 3 / 보통 2 / 어려움 1). 생성은 그대로 두고 노출만 줄인다.
         missions = [apply_hint_limit(m, difficulty) for m in missions]
@@ -275,13 +294,20 @@ async def generate_basic_scenario(
     #    결정=eager(생성시 유계 트리 확정) · 근거 docs/route-branching.md. off면 선형 그대로.
     is_branching = False
     route_tree = None
+    # QA·재생성이 grounding 근거로 쓰는 원천 노드(node_id → 원본). 샛길 노드는 분기에서 등록.
+    sources: dict[str, dict] = {n["node_id"]: n for n in route}
     if with_branching:
         node_sequence, route_tree = await _apply_branching(
             node_sequence, route, nodes, region,
             with_dialogue=with_dialogue, with_content=with_content,
             difficulty=difficulty, trigger_radius_m=trigger_m,
+            sources=sources, flags=qa_flags,
         )
         is_branching = route_tree is not None
+    # [v6 A1] 생성 QA 대응 루프 — 실패한 출력만 재생성하고, 못 고치면 qa_flags로 알린다.
+    #         link_state_graph 이전에 돈다(재생성 시 enrich_quest가 다시 컴파일되므로).
+    node_sequence, loop_flags = await _run_qa_pass(node_sequence, sources)
+    qa_flags.extend(loop_flags)
     node_sequence = link_state_graph(node_sequence)
     return {
         "scenario_id": _make_scenario_id(region, [q["node_id"] for q in node_sequence]),
@@ -294,12 +320,14 @@ async def generate_basic_scenario(
         "is_public": False,
         "is_branching": is_branching,             # 갈림길(route 분기) 포함 여부
         "route_tree": route_tree,                 # 분기 그래프(선택→다음 노드). 선형이면 None
+        "qa_flags": qa_flags,                     # 사람이 읽는 생성 품질 경고(정상이면 [])
     }
 
 async def _apply_branching(
     node_sequence: list[dict], route: list[dict], candidates: list[dict], region: str, *,
     with_dialogue: bool, with_content: bool,
     difficulty: str = "normal", trigger_radius_m: int = 100,
+    sources: dict[str, dict] | None = None, flags: list[str] | None = None,
 ) -> tuple[list[dict], dict | None]:
     """본선 node_sequence에 갈림길 1곳을 얹어 다이아몬드 트리로 만든다(재합류).
     ① 분기 노드 선택 → ② 예비 후보에서 샛길 노드 픽 → ③ 샛길 노드 콘텐츠(대사·미션) 생성
@@ -321,9 +349,11 @@ async def _apply_branching(
                 "stone_index": max(0, bp_i), "stone_total": 0}
     alt_src["overview"] = await _overview_for(alt_src) or ""
     get_region_cache().warm(region, {alt_src["node_id"]: alt_src["overview"]})
+    if sources is not None:
+        sources[alt_src["node_id"]] = alt_src      # QA 루프가 이 노드의 grounding을 찾을 수 있게
     alt_dialogue = await _dialogue_for(alt_src, alt_meta) if with_dialogue else _fixed(alt_src, alt_meta)
     alt_motivations = await _motivations_for(alt_src, alt_meta)   # [v3] 동기 → 미션 타입 순서 유지
-    alt_mission = await _content_for(alt_src, alt_meta, alt_motivations) if with_content else None
+    alt_mission = await _content_for(alt_src, alt_meta, alt_motivations, flags) if with_content else None
     alt_mission = apply_hint_limit(alt_mission, difficulty)     # 샛길도 같은 난이도 규칙
     alt_quest = _build_branch_quest(alt_src, len(node_sequence), region, alt_dialogue,
                                     alt_mission, motivations=alt_motivations,
@@ -387,10 +417,16 @@ async def _motivations_for(node: dict, meta: dict) -> list[str]:
     return list(dict.fromkeys(codes))[:2]
 
 
-async def _content_for(node: dict, meta: dict, motivations: list[str]) -> dict | None:
+async def _content_for(node: dict, meta: dict, motivations: list[str],
+                       flags: list[str] | None = None) -> dict | None:
     """관광 노드 미션 생성(타입별 다양화). 식음노드는 기억석 미션 없음(None).
     실패해도 시나리오 안 막음(폴백 보장).
     [v3 #30] 미션 타입은 동기가 허용하는 전략의 것만 순환 — 텍스트↔액션 정합 보장.
+
+    [v6] 실패(LLM 오류·JSON 파싱)는 조용히 넘기지 않는다 —
+      scenario_mission_max_retries(기본 1)만큼 다시 시도하고, 그래도 실패하면 기존
+      제네릭 폴백을 쓰되 flags에 사유를 남겨 응답(qa_flags)으로 내보낸다.
+      ⚠️ 이 재시도는 LLMClient의 429 백오프와 별개다(그건 '호출 실패', 이건 '생성 실패').
     """
     if meta["is_food"]:
         return None                        # 식음노드 = 경유/보상, 기억석 미션 아님
@@ -399,20 +435,46 @@ async def _content_for(node: dict, meta: dict, motivations: list[str]) -> dict |
         motivations, meta["stone_index"] or 0,
         is_finale=meta["is_finale"], is_food=False,
     )
-    try:
-        return await generate_mission(name, overview, mtype)
-    except Exception as e:
-        logger.warning("노드 %s 미션 생성 실패: %s", node.get("node_id"), e)
-        return {"type": mtype, "order": f"{name} 주변을 살펴 기억석 조각을 찾아라.",
-                "hints": ["주변을 둘러보거라."]}
+    attempts = 1 + max(0, get_settings().scenario_mission_max_retries)
+    for attempt in range(1, attempts + 1):
+        try:
+            return await generate_mission(
+                name, overview, mtype,
+                feedback=_MISSION_RETRY_FEEDBACK if attempt > 1 else "",
+            )
+        except Exception as e:
+            logger.warning("노드 %s 미션 생성 실패(%d/%d): %s",
+                           node.get("node_id"), attempt, attempts, e)
+    if flags is not None:
+        flags.append(f"{name}: 미션 생성 실패 → 제네릭 미션 폴백")
+    return generic_mission(name, mtype)     # 기존 제네릭 폴백 유지 — 코스는 계속 만들어진다
 
-def _run_qa_log(quest: dict, node: dict) -> None:
-    """[v3 #30] QA 배선 — 게이트가 아니라 경고 로그(휴리스틱). DTO에는 넣지 않는다."""
-    qa = run_qa(quest, node)
-    flags = {k: qa[k] for k in ("answer_leak", "tone_ok", "hallucination_flag", "contract_ok")}
-    if qa["answer_leak"] or not qa["tone_ok"] or qa["hallucination_flag"] or not qa["contract_ok"]:
-        logger.warning("QA 플래그 %s(%s): %s unsupported=%s",
-                       node.get("node_id"), quest.get("name"), flags, qa["unsupported_tokens"])
+# 미션 재시도 시 다음 호출에 싣는 지시 — 직전 실패 원인(형식 위반)을 알려주고 다시 쓰게 한다.
+_MISSION_RETRY_FEEDBACK = (
+    "직전 출력이 지정한 JSON 형식이 아니어서 사용할 수 없었다. "
+    "설명·머리말 없이 지정된 키만 가진 JSON 객체 하나만 출력하라."
+)
+
+
+async def _run_qa_pass(node_sequence: list[dict],
+                       sources: dict[str, dict]) -> tuple[list[dict], list[str]]:
+    """[v6 A1] 조립된 퀘스트마다 QA 루프(qa_graph)를 돌려 보수하고 미해결 사유를 모은다.
+
+    예전 _run_qa_log는 결함을 경고 로그로만 남기고 그대로 내보냈다 —
+    이제는 원인이 된 출력만 재생성하고, 끝내 못 고치면 qa_flags로 알린다.
+    식음 노드는 기억석 미션·조각이 없어 QA 대상이 아니다(기존 _run_qa_log와 같은 범위).
+    """
+    targets = [i for i, q in enumerate(node_sequence) if not _is_food(q)]
+    results = await asyncio.gather(
+        *[run_qa_loop(node_sequence[i], sources.get(node_sequence[i].get("node_id")) or {})
+          for i in targets]
+    )
+    out = list(node_sequence)
+    flags: list[str] = []
+    for i, (quest, node_flags) in zip(targets, results):
+        out[i] = quest
+        flags.extend(node_flags)
+    return out, flags
 
 
 def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
@@ -449,9 +511,7 @@ def _build_quest(node: dict, order: int, meta: dict, region: str, dialogue: str,
         "npc_dialogue": dialogue,
         "is_finale": meta["is_finale"],
     }
-    enriched = enrich_quest(quest, node, motivations=motivations)
-    _run_qa_log(enriched, node)
-    return enriched
+    return enrich_quest(quest, node, motivations=motivations)
 
 def _build_food_quest(node: dict, order: int, dialogue: str, trigger_radius_m: int = 100) -> dict:
     """식음(카페·식당) 경유 퀘스트. 기억석 아님 — fragment_id/미션 없음, 쿠폰·가격밴드만."""
@@ -508,9 +568,7 @@ def _build_branch_quest(node: dict, order: int, region: str, dialogue: str,
         "npc_dialogue": dialogue,
         "is_finale": False,
     }
-    enriched = enrich_quest(quest, node, motivations=motivations)
-    _run_qa_log(enriched, node)
-    return enriched
+    return enrich_quest(quest, node, motivations=motivations)
 
 def _make_scenario_id(region: str, node_ids: list[str]) -> str:
     """노드 구성으로 결정적 시나리오 ID(같은 구성=같은 ID → 재사용 키 기반)."""
