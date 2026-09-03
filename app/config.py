@@ -112,6 +112,14 @@ class Settings(BaseSettings):
     scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 박준형 EDA 후 >0
     scenario_food_per_route: int = 0      # 경로당 삽입할 카페/식당 수 — 정찬희 실데이터 후 >0
 
+    # --- 생성 QA 대응 루프 (A1 — app/scenario/qa_graph.py) ---
+    #  run_qa가 잡은 결함을 '경고 로그'로 흘리지 않고, 문제가 된 LLM 출력만 골라 재생성한다.
+    #  ⚠️ LLMClient의 429 백오프 재시도와는 다른 층이다 — 이건 "출력 품질" 재생성 횟수.
+    #  0으로 두면 재생성 없이 qa_flags만 남긴다(비용 절약·mock 구동용 탈출구).
+    scenario_qa_max_regen: int = 2        # QA 실패 시 재생성 상한(초과 시 qa_flags로 종료)
+    #  미션 생성이 LLM/JSON 실패로 제네릭 폴백이 되기 전에 한 번 더 시도한다.
+    scenario_mission_max_retries: int = 1  # 미션 생성 실패 시 재시도 횟수
+
     # --- 식음 삽입/예산 게이팅 (food.py — 박준형) ---
     food_min_meal_target_krw: int = 4000  # 식사 슬롯 성립 최소 1인 예산 (정책값) — 미만이면 카페 다운그레이드
     food_min_cafe_target_krw: int = 2500  # 카페 슬롯 성립 최소 1인 예산 (정책값) — 미만이면 식음 0개 폴백
