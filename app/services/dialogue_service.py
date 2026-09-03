@@ -36,9 +36,11 @@ def _utterance(player_state: dict | None) -> str:
 
 async def run_dialogue(
     node_id: str, stage: str, player_state: dict, *, node_name: str = "",
-    region_id: str = "",
+    region_id: str = "", qa_feedback: str = "",
 ) -> tuple[str, bool]:
     """[서비스] 대화 그래프를 invoke해 (대사, 캐시히트여부) 반환.
+
+    qa_feedback: A1 QA 루프가 반려한 이유(있으면 캐시 우회 + 프롬프트에 재작성 지시).
 
     담당: 오케스트레이션 연결 = 김예슬.
     """
@@ -49,6 +51,7 @@ async def run_dialogue(
         "stage": stage,
         "player_state": player_state,
         "query": _utterance(player_state),
+        "qa_feedback": qa_feedback,
     }
     result = await _graph.ainvoke(state)
     return result.get("response", ""), result.get("cache_hit", False)
