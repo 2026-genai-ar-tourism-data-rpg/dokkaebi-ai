@@ -19,6 +19,11 @@ class LLMCallError(DokkaebiAIError):
     """LLM 호출 실패(재시도 소진·미구현 provider 등)."""
 
 
+class MissionGenerationError(DokkaebiAIError):
+    """노드 미션 생성 실패(LLM 호출 실패 또는 JSON 파싱 실패).
+    → 호출측(generator)이 재시도/제네릭 폴백을 결정한다. 조용히 삼키지 말 것."""
+
+
 class EmbeddingRateLimitError(DokkaebiAIError):
     """임베딩 API 429(rate limit). EmbeddingClient가 백오프 재시도 대상으로 처리.
     → provider 구현체는 429 응답을 이 예외로 변환해서 raise해야 함."""

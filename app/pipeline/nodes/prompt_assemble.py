@@ -41,4 +41,11 @@ async def prompt_assemble(state: DialogueState) -> dict:
         f"- 사용자 진행상황: {progress_line(state.get('player_state'))}"
         f"   - 사용자 발화: {state.get('query', '')}"
     )
+    # (A1 QA 재생성) 직전 출력이 반려된 이유를 그대로 실어 보낸다 — 같은 호출 재시도가
+    # 아니라 "무엇이 틀렸는지 알려주고 다시 쓰게 하는" 재생성이어야 한다.
+    if state.get("qa_feedback"):
+        prompt += (
+            f"\n\n[재작성 지시]\n{state['qa_feedback']}\n"
+            f"위 지적을 반드시 반영해 대사를 다시 쓴다."
+        )
     return {"prompt": prompt}

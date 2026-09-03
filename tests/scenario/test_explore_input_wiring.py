@@ -83,7 +83,7 @@ def test_use_fixed_script면_정답지를_재생한다(monkeypatch):
     ))
     assert not captured, "정답지 재생인데 동적 생성이 돌았다"
     assert scn["scenario_id"] == "scn_종로_정답지"
-    assert len(scn["node_sequence"]) == 5
+    assert len(scn["node_sequence"]) == 7   # 프롤로그(안국역) + 조각 5개 + 피날레(광화문)
     assert scn["headcount"] == 2               # companion→인원수는 정답지에도 반영
 
 

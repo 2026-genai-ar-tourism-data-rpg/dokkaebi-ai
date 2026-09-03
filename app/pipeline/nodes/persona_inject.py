@@ -40,7 +40,11 @@ async def persona_inject(state: DialogueState) -> dict:
     persona = await _load_persona(node_id, state.get("node_name", ""))
     # 사용자 발화가 있으면 캐시를 쓰지 않는다(빈 키) — 질문이 달라도 같은 대사가 나가면
     # 되묻는 의미가 없다. 발화 없는 정형 대사(등장·완료 등)만 노드·stage로 캐싱한다.
-    cache_key = "" if state.get("query") else f"npc:{version}:{node_id}:{stage}"
+    # QA 재생성(qa_feedback)도 마찬가지 — 캐시를 타면 방금 반려한 그 대사가 그대로 돌아온다.
+    cache_key = (
+        "" if state.get("query") or state.get("qa_feedback")
+        else f"npc:{version}:{node_id}:{stage}"
+    )
     return {"persona": persona, "cache_key": cache_key}
 
 
