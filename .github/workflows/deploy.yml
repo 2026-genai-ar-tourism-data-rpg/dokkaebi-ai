@@ -1,0 +1,46 @@
+# ============================================================
+# [v1] deploy.yml — main 머지 시 EC2 자동 배포 (ai 서비스만 재빌드)
+# pipeline: 인프라 / CI-CD
+# 구현(요약): main push → SSH로 EC2 접속 → ai 레포 main 동기화 →
+#            compose로 ai 서비스만 빌드·재기동 → 컨테이너 내부 헬스체크.
+#            시크릿: DEPLOY_HOST, DEPLOY_SSH_KEY (org 레벨 권장).
+# 구현일: 2026-08-31 | 작성: kys (deploy-cicd/kys/v1)
+# ============================================================
+name: deploy-ai
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2        # ai/server/infra 배포가 EC2에서 겹치지 않게 직렬화
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy ai to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ubuntu
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 20m
+          script: |
+            set -e
+            cd ~/dokkaebi/dokkaebi-ai
+            git fetch origin main
+            git reset --hard origin/main
+            cd ~/dokkaebi/dokkaebi-infra
+            docker compose -f docker-compose.prod.yml up -d --build ai
+            # uvicorn 기동 대기 후 컨테이너 내부 헬스체크 (8001은 외부 비노출)
+            for i in $(seq 1 10); do
+              if docker compose -f docker-compose.prod.yml exec -T ai \
+                python -c "import urllib.request;urllib.request.urlopen('http://localhost:8001/v1/health',timeout=5)"; then
+                echo "ai healthy"; exit 0
+              fi
+              sleep 5
+            done
+            echo "ai health check failed"; docker compose -f docker-compose.prod.yml logs --tail 100 ai; exit 1
