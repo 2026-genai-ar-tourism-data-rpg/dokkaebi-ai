@@ -17,6 +17,13 @@
 #            `selected[:count]` 캡 제거로 앵커 전부 보존(C). 이 hook 자체는 변경 없음
 #            (처음부터 캡 없이 B/C를 반환했음) — 경계 쪽 가드/캡만 따라잡음.
 # 구현일: 2026-07-14 | 작성: 정찬희 (radius-edge/jch/v1)
+# ------------------------------------------------------------
+# [v3] 합성 앵커에 tour_content_id 보존 — 위시 장소가 근거 없이 말하던 것 수정.
+# 구현(요약): 합성 노드에 content_id를 안 실어 보내 generator._overview_for가 상세 조회를
+#            못 했다. 그 결과 **사용자가 콕 집어 넣은 장소**의 도깨비만 원문 없이 말했다
+#            (실측: 경복궁 grounding 0자 → 모델 기억으로 발화). content_id는 이미 손에
+#            있으므로 키 하나만 실어 주면 detailCommon2로 원문을 받는다.
+# 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
 # ============================================================
 from app.core.logger import get_logger
 
@@ -72,6 +79,8 @@ def _synthesize_anchor(content_id: str, name: str | None,
     """
     return {
         "node_id": f"{WISH_NODE_PREFIX}{content_id}",
+        # 원문(overview) 조회 키 — 없으면 이 노드만 grounding 없이 대사가 나간다.
+        NODE_CONTENT_ID_KEY: content_id,
         "name": name,            # 앱이 넘긴 표시 이름(없으면 None)
         "map_x": lng,            # 경도(lng) → map_x
         "map_y": lat,            # 위도(lat) → map_y

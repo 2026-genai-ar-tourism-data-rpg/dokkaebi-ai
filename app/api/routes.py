@@ -3,7 +3,15 @@
 # pipeline: AI 백엔드 / 서빙 레이어 (진입점)
 # 구현(요약): POST /v1/dialogue · POST /v1/scenarios · GET /v1/health
 # 구현일: 2026-06-10 (시나리오 추가: 2026-06-18) | 작성: kys
+# ------------------------------------------------------------
+# [v2] headcount(인원수)를 ScenarioRequest로 전달 — 식음 예산 게이팅 배선(기본 1).
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
+# ------------------------------------------------------------
+# [v3] 앱 마법사 입력(duration·companion·difficulty·tags·use_fixed_script) 전달.
+# 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
 # ============================================================
+import asyncio
+
 from fastapi import APIRouter
 
 from app.api.schemas import (
@@ -11,6 +19,8 @@ from app.api.schemas import (
     DialogueResponse,
     DialogueTurnRequest,
     DialogueTurnResponse,
+    NearbyPlace,
+    NearbyResponse,
     ScenarioGenRequest,
     ScenarioGenResponse,
     SearchCandidate,
@@ -30,7 +40,7 @@ _tour = TourAPIClient()
 @router.post("/dialogue", response_model=DialogueResponse)
 async def dialogue(req: DialogueRequest) -> DialogueResponse:
     """[엔드포인트] NPC 대화 생성 — 게임 서버 내부 호출용."""
-    text, hit = await run_dialogue(req.node_id, req.stage, req.player_state)
+    text, hit = await run_dialogue(req.node_id, req.stage, req.player_state, node_name=req.node_name)
     return DialogueResponse(response=text, cache_hit=hit)
 
 
@@ -40,7 +50,9 @@ async def dialogue_turn(req: DialogueTurnRequest) -> DialogueTurnResponse:
     out = await run_branching(
         node_id=req.node_id, node_name=req.node_name, region_id=req.region_id,
         history=req.history, inventory=req.inventory, last_choice=req.last_choice,
-        turn=req.turn, fragment_id=req.fragment_id,
+        turn=req.turn, fragment_id=req.fragment_id, player_state=req.player_state,
+        kind=req.kind,
+        branch=req.branch.model_dump() if req.branch else None,
     )
     return DialogueTurnResponse(**out)
 
@@ -56,8 +68,14 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         transport=req.transport,
         wishlist=[WishItem(content_id=w.content_id, name=w.name, lat=w.lat, lng=w.lng, kind=w.kind) for w in req.wishlist],
         budget=req.budget,
+        headcount=req.headcount,
         no_meals=req.no_meals,
         region=req.region,
+        duration=req.duration,
+        companion=req.companion,
+        difficulty=req.difficulty,
+        tags=list(req.tags),
+        use_fixed_script=req.use_fixed_script,
         with_dialogue=req.with_dialogue,
         with_content=req.with_content,
         with_branching=req.with_branching,
@@ -76,6 +94,41 @@ async def search(keyword: str, content_type_id: int = 12, top_n: int = 8) -> Sea
             addr=c.get("addr"), lat=c.get("map_y"), lng=c.get("map_x"),
         )
         for c in cands
+    ])
+
+
+def _one_line_summary(overview: str | None, max_len: int = 60) -> str | None:
+    """개요 텍스트를 카드용 한 줄 요약으로 자른다 — 첫 문장 우선, 길면 글자수로 자름."""
+    if not overview:
+        return None
+    text = " ".join(overview.split())
+    period = text.find(". ")
+    head = text[: period + 1] if 0 <= period < max_len else text
+    return head[:max_len].rstrip() + ("…" if len(head) > max_len else "")
+
+
+@router.get("/nearby", response_model=NearbyResponse)
+async def nearby(lat: float, lng: float, radius_m: int = 2000, top_n: int = 20) -> NearbyResponse:
+    """[엔드포인트] 내 주변 POI 목록(거리순) — "내 주변 탐험" 탭.
+
+    시나리오 생성(/scenarios)과 달리 LLM·경로계산을 타지 않아 즉시 응답한다.
+    앱은 이 목록에서 한 곳을 골라 그 자리에서 바로 AR 탐색에 들어간다.
+    설명(summary)은 detailCommon2 캐시를 재사용(_overview_for와 동일 패턴) — 병렬 호출,
+    캐시 히트면 TourAPI 재호출 없음.
+    """
+    nodes = await _tour.location_based_list(lng, lat, radius_m)
+    nodes = nodes[:top_n]
+    details = await asyncio.gather(
+        *[_tour.detail_common(n.get("tour_content_id")) for n in nodes]
+    )
+    return NearbyResponse(places=[
+        NearbyPlace(
+            node_id=str(n.get("node_id")), name=n.get("name"),
+            addr=n.get("addr1"), lat=n.get("map_y"), lng=n.get("map_x"),
+            dist_m=n.get("dist_m"), category=n.get("category") or "other",
+            summary=_one_line_summary((d or {}).get("overview")),
+        )
+        for n, d in zip(nodes, details)
     ])
 
 

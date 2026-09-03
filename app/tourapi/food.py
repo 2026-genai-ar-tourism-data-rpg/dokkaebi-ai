@@ -18,6 +18,11 @@
 #   · 마커 = kind="food"/"cafe" + price_band (_build_quest 분기는 김예슬 공동 PR)
 #   · 스위치 = settings.scenario_food_per_route (기본 0 = no-op, 기존 동작 보존)
 # 구현일: 2026-07-04 | 작성: pjh (food-budget/pjh/v1) | v1 mock(kys) 폴백 유지
+# ------------------------------------------------------------
+# [v4] 좌표 결측 후보 드롭 — _normalize_food_item 가드.
+#      좌표 없는 후보 1개가 attach_price_bands에서 터지면 gather가 통째로 실패해
+#      실데이터 후보 전체가 mock으로 조용히 폴백되던 문제(실키 투입 시 발현).
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -160,16 +165,26 @@ def gap_segments(route: list[dict]) -> list[tuple[float, int, float, float]]:
 # 4. 후보 fetch — TourAPI 39 + 구글 밴드 부착 (키 없으면 mock)
 # ------------------------------------------------------------
 def _normalize_food_item(it: dict) -> dict | None:
-    """locationBasedList2(39) item → 식음 후보 노드 (밴드는 아직 미부착)."""
+    """locationBasedList2(39) item → 식음 후보 노드 (밴드는 아직 미부착).
+
+    좌표가 없는 item은 드롭한다. 좌표 없이 통과시키면 (1) 구간 삽입 위치를 못 정하고
+    (2) attach_price_bands가 캐시 키를 만들 때 round(None,4)로 터져 gather 전체가 실패,
+    후보 리스트가 통째로 mock 폴백된다(실데이터인데 조용히 종로 mock이 나감).
+    """
     cat3 = it.get("cat3")
     if cat3 in _EXCLUDE_CAT3:
+        return None
+    map_x = float(it["mapx"]) if it.get("mapx") else None
+    map_y = float(it["mapy"]) if it.get("mapy") else None
+    if map_x is None or map_y is None:
+        logger.warning("좌표 결측 식음 후보 드롭: %s", it.get("title"))
         return None
     return {
         "node_id": f"food_{it.get('contentid')}",
         "tour_content_id": it.get("contentid"),
         "name": it.get("title"),
-        "map_x": float(it["mapx"]) if it.get("mapx") else None,
-        "map_y": float(it["mapy"]) if it.get("mapy") else None,
+        "map_x": map_x,
+        "map_y": map_y,
         "addr1": it.get("addr1"), "cat3": cat3,
         "kind": "cafe" if cat3 in _CAFE_CAT3 else "food",
         "source": "TourAPI39",

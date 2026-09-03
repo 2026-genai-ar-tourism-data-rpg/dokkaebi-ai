@@ -13,9 +13,20 @@
 # - 기본은 지역 벌크 조회 + TTL 캐시, 개별 tAtsNm 조회는 제한 fallback용.
 # - 원본 API key는 정규화하지 않고 그대로 반환함.
 # 구현일: 2026-07-04 | 작성: ljs (lowtraffic-select/ljs/v1)
+# ------------------------------------------------------------
+# [v3] 동기 호출이 이벤트 루프를 막던 문제 해소(호출측) + 중복 fetch 방지.
+# 구현(요약): v2 주석의 전제("루프 안이라 asyncio.run 불가")가 실제로는 루프 블로킹이었다.
+#            비인기 앵커를 켜면 이 동기 httpx가 최대 40페이지 도는 동안 FastAPI 워커
+#            전체가 멈춰 다른 사용자의 요청까지 대기했다.
+#            → generator가 build_route를 asyncio.to_thread로 넘겨 루프를 비운다(호출측 수정).
+#              여기서는 그로 인해 가능해진 동시 캐시 미스를 락으로 직렬화해, 같은 지역을
+#              여러 스레드가 중복 fetch하지 않게 한다.
+#            네트워크 예외는 base.network_error로 통일(재시도 가능 장애로 분류).
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 from __future__ import annotations
 
+import threading
 import time
 from datetime import date
 from typing import Any
@@ -24,13 +35,17 @@ import httpx
 
 from app.config import get_settings
 from app.core.logger import get_logger
-from app.tourapi.base import TourAPIError, _reason, request_all
+from app.tourapi.base import TourAPIError, network_error, request_all
 
 logger = get_logger(__name__)
 
 _OK_CODES = ("0000", "00", "0")
 _DENSITY_SNAPSHOT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _DENSITY_TATS_NAME_CACHE: dict[str, tuple[float, list[dict]]] = {}
+# snapshot 조회는 최대 40페이지짜리 동기 호출이다. generator가 build_route를 to_thread로
+# 넘기면서 여러 요청이 동시에 캐시 미스를 맞을 수 있어, 같은 지역 중복 fetch를 막는다.
+# (지역 수가 적어 지역별 락 대신 단일 락 — 다른 지역은 잠깐 직렬화된다)
+_DENSITY_SNAPSHOT_LOCK = threading.Lock()
 
 
 def recent_base_ym(months_ago: int = 2) -> str:
@@ -150,6 +165,18 @@ def fetch_density_snapshot_sync(region: str | None = None) -> dict[str, Any] | N
     if cached is not None:
         return cached
 
+    with _DENSITY_SNAPSHOT_LOCK:
+        # 락을 기다리는 동안 다른 스레드가 채웠을 수 있다(double-check) → 중복 fetch 회피
+        cached = _cache_get(_DENSITY_SNAPSHOT_CACHE, cache_key)
+        if cached is not None:
+            return cached
+        return _fetch_density_snapshot(s, target_region, area_cd, signgu_cd, base_ym, cache_key)
+
+
+def _fetch_density_snapshot(
+    s: Any, target_region: str, area_cd: str, signgu_cd: str, base_ym: str, cache_key: str,
+) -> dict[str, Any] | None:
+    """snapshot 실제 조회 + 캐시 적재. 호출측이 락과 캐시 확인을 마친 뒤 부른다."""
     root = s.tourapi_data_base_url.rstrip("/")
     try:
         concentration_rows = _sync_request_all(
@@ -262,8 +289,8 @@ def _sync_request(base_url: str, operation: str, params: dict, *, timeout: float
         with httpx.Client(timeout=timeout or s.tourapi_timeout) as client:
             resp = client.get(url, params=full)
     except httpx.HTTPError as e:
-        # 원인 없는 빈 메시지 방지 — base._reason이 타입명까지 남긴다.
-        raise TourAPIError(f"TourAPI {_reason(e)}({operation})") from e
+        # 원인 없는 빈 메시지 방지 + 재시도 가능 장애로 분류 — base.network_error 공용.
+        raise network_error(e, operation) from e
 
     if resp.status_code >= 400:
         raise TourAPIError(f"TourAPI HTTP {resp.status_code}({operation}): {resp.text[:200]}")

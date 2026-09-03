@@ -10,6 +10,11 @@
 #    50% 미만이면 이 방식 폐기 예정 (HANDOFF §6). 비용: Pro 무료상한(월 5천콜) 내
 #    파일럿 무료 — 단 billing 연결·일일 상한 설정은 사람이 해야 함.
 # 구현일: 2026-07-04 | 작성: pjh (food-budget/pjh/v1)
+# ------------------------------------------------------------
+# [v2] 좌표 없는 후보 방어 — fetch_price_band 진입 가드.
+#      cache_key의 round(lat,4)가 try 바깥이라, 좌표 결측 후보 1개의 TypeError가
+#      attach_price_bands의 gather를 타고 올라가 후보 전체를 mock 폴백시켰다.
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 import asyncio
 
@@ -35,7 +40,7 @@ _LEVEL_TO_BAND = {
 BAND_LABEL = {1: "₩", 2: "₩₩", 3: "₩₩₩", 4: "₩₩₩₩", None: "가격대 정보 없음"}
 
 
-async def fetch_price_band(name: str, lat: float, lng: float) -> int | None:
+async def fetch_price_band(name: str, lat: float | None, lng: float | None) -> int | None:
     """업소 1곳의 가격대 밴드(1~4) 조회. 키 없음/미발견/실패 = None(미상).
 
     캐시 키는 이름+좌표(구글 place_id를 아직 모르는 시점이라) — hit이면 호출 0.
@@ -44,6 +49,11 @@ async def fetch_price_band(name: str, lat: float, lng: float) -> int | None:
     api_key = getattr(s, "google_maps_api_key", "")
     if not api_key:
         return None                      # 키 없음 — 호출 자체를 안 함 (mock 경로는 food.py)
+    if lat is None or lng is None:
+        # 캐시 키(round)와 locationBias가 좌표를 요구한다. 여기서 막지 않으면 TypeError가
+        # attach_price_bands의 gather를 타고 올라가 후보 리스트 전체를 날린다.
+        logger.warning("좌표 없는 후보 priceLevel 조회 skip → 미상 처리: %s", name)
+        return None
 
     cache = get_cache()
     cache_key = f"gprice:{name}:{round(lat,4)}:{round(lng,4)}"

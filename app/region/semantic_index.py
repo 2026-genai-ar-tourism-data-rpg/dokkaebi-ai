@@ -5,6 +5,11 @@
 #            코사인 top-k(search). Vector DB/ANN 없음(지역당 수십~수천 벡터면 numpy로 충분).
 #            인덱싱(add)=이지선 / top-k·재랭킹·임계 튜닝=박준형.
 # 구현일: 2026-06-16 | 작성: kys (semantic-search/kys/v1)
+# ------------------------------------------------------------
+# [v2] add() 입력 검증 — node_ids/vectors 개수 불일치를 즉시 raise.
+#      길이가 어긋나면 행↔ID 대응이 깨진 채 인덱스가 만들어져, search가 예외 없이
+#      '엉뚱한 노드'를 돌려준다(조용한 오답). 적재 시점에 잡는다.
+# 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
 # ============================================================
 from collections import OrderedDict
 
@@ -20,7 +25,8 @@ class RegionSemanticIndex:
     """한 지역의 노드 임베딩 인메모리 인덱스. brute-force 코사인 top-k.
 
     - add   : 빌드타임/지역 워밍 시 노드 벡터 적재 (정규화해 보관) — 이지선
-    - search: 쿼리 벡터로 top-k 노드 반환 — 박준형(재랭킹·쿼리변환·저신뢰 재검색은 TODO)
+    - search: 쿼리 벡터로 top-k 노드 반환(순수 코사인) — 박준형
+      재랭킹·쿼리변환·저신뢰 재검색은 텍스트·LLM이 필요해 pipeline/nodes/retrieve.py로 이관(정찬희)
     """
 
     def __init__(self, region_id: str, dim: int) -> None:
@@ -36,6 +42,11 @@ class RegionSemanticIndex:
         """
         if not node_ids:
             return
+        if len(node_ids) != len(vectors):
+            # 행 i ↔ node_ids[i] 대응이 깨지면 검색이 '조용히' 엉뚱한 노드를 돌려준다.
+            raise ValueError(
+                f"node_ids/vectors 개수 불일치: {len(node_ids)} != {len(vectors)}"
+            )
         mat = np.asarray(vectors, dtype=np.float32)
         if mat.shape[1] != self._dim:
             raise ValueError(f"임베딩 차원 불일치: {mat.shape[1]} != {self._dim}")
@@ -60,7 +71,7 @@ class RegionSemanticIndex:
         top_idx = np.argpartition(-scores, k - 1)[:k]  # 상위 k개(비정렬)
         top_idx = top_idx[np.argsort(-scores[top_idx])]  # 점수 내림차순 정렬
         results = [(self._ids[i], float(scores[i])) for i in top_idx if scores[i] >= min_score]
-        # TODO(박준형): 재랭킹(크로스인코더 등)·쿼리 변환·저신뢰(<임계) 시 재검색
+        # 재랭킹·쿼리변환·저신뢰 재검색은 pipeline/nodes/retrieve.py 참조(텍스트·LLM 접근이 필요해 상위로 이관)
         return results
 
     def __len__(self) -> int:

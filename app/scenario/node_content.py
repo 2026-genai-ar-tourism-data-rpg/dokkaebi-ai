@@ -16,10 +16,10 @@
 import json
 
 from app.core.logger import get_logger
-from app.llm.client import LLMClient
+from app.llm.client import get_llm
 
 logger = get_logger(__name__)
-_llm = LLMClient()
+_llm = get_llm()
 
 # 노드 순서대로 순환 배정 → 매 노드 다른 미션 (피날레는 DIALOGUE_COLLECT)
 # 앞쪽에 AR 액션형(사냥/복원/추적)을 둬서 짧은(5노드) 코스에서도 다양하게 노출

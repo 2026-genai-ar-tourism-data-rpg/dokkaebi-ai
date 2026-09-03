@@ -54,7 +54,9 @@ class Settings(BaseSettings):
 
     # --- 의미검색(retrieve 노드) 파라미터 (검색 알고리즘: 박준형) ---
     search_top_k: int = 5               # 코사인 top-k 후보 수
-    search_min_score: float = 0.3       # 최소 유사도(이하 = 무관). 저신뢰 재검색 임계는 박준형 튜닝
+    search_min_score: float = 0.3       # 최소 유사도(이하 = 무관)
+    search_low_confidence_threshold: float = 0.5  # 이 미만이면 쿼리 재작성 후 1회 재검색(튜닝 필요)
+    search_rerank_lexical_weight: float = 0.3     # 재랭킹 블렌드: 코사인*(1-w) + 키워드overlap*w
 
     # --- TourAPI (국문관광정보 — 노드 데이터 원천) ---
     #  service_key 없으면 mock 종로 노드로 구동(거리순 로직 검증)
@@ -68,8 +70,37 @@ class Settings(BaseSettings):
     tourapi_mobile_app: str = "dokkaebi"
     tourapi_timeout: float = 10.0
 
+    # --- OSM (키리스 실데이터 폴백 — TourAPI 키 없을 때 POI·검색 원천) ---
+    #  Overpass(반경 POI)·Nominatim(키워드 검색) 공개 인스턴스. 상용 트래픽 금지·
+    #  User-Agent 필수(정책). 캐시로 호출 최소화 — Nominatim은 1req/s 제한.
+    # ⚠️ **전역 커버리지 미러만 넣을 것.** overpass.osm.ch는 0.9s로 가장 빨라 1순위로
+    #   뒀다가 걸렸다 — 스위스 전용 DB라 한국 쿼리에 200 + 빈 결과를 준다(실측:
+    #   한국 0건 / 취리히 20건). 200이라 페일오버도 안 걸려 조용히 빈 코스가 된다.
+    #   osm.py가 "빈 결과도 실패로 간주"해 다음 미러로 넘기지만, 애초에 넣지 말 것.
+    # ⚠️ 한때 미러가 동시에 전부 죽어 시나리오 생성이 500으로 막힌 적이 있다
+    #   → 전부 실패해도 Nominatim 폴백(osm.py)이 받아 코스는 만들어진다.
+    osm_overpass_urls: str = (
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter,"
+        "https://overpass-api.de/api/interpreter,"
+        "https://overpass.kumi.systems/api/interpreter"
+    )
+    osm_nominatim_url: str = "https://nominatim.openstreetmap.org/search"
+    # 미러당 타임아웃 — 짧게 잡고 빨리 다음 미러로(전 미러 대기가 사용자 체감 지연).
+    osm_timeout: float = 8.0
+    # POI는 거의 정적 → 길게. 미러가 다 죽어도 캐시가 있으면 그 좌표는 계속 돈다.
+    osm_cache_ttl_s: int = 86400
+    osm_user_agent: str = "dokkaebi-ai/0.1 (dev; contact: team)"
+
     # --- 분기 대화 (찐 RPG, 기획 8-D) ---
-    max_dialogue_turns: int = 3          # 노드당 대화 깊이 상한(초과 시 조각 획득으로 수렴)
+    max_dialogue_turns: int = 3          # 노드당 대화 깊이 상한(초과 시 의뢰 수령으로 수렴)
+    dialogue_history_turns: int = 6      # 프롬프트에 넣을 최근 대화 줄 수(글자수로 자르면 문장이 깨짐)
+
+    # --- 프롬프트 버전 (캐시 키에 박히는 값) ---
+    #  ⚠️ 프롬프트·템플릿을 고치면 **반드시** 올릴 것. 캐시 키에 이 값이 없으면
+    #     대사는 cache_ttl_s(1일), 페르소나는 7일 동안 옛 출력이 계속 나간다
+    #     ("고쳤는데 왜 그대로냐"의 원인). 올린 직후 첫 요청은 전 노드 재생성이라
+    #     LLM 호출이 몰린다 → 시연 직전에 올리지 말고 미리 한 번 데워 둘 것.
+    prompt_version: str = "v2"
 
     # --- 시나리오 생성 (거리순 v0) ---
     scenario_content_type_id: int = 12   # 12=관광지 (식당39 등은 나중)
@@ -137,9 +168,14 @@ class Settings(BaseSettings):
     cache_backend: str = "memory"
     cache_ttl_s: int = 86400            # 대사 캐시 TTL(초) — 기본 1일
     tourapi_cache_ttl_s: int = 604800   # 노드 상세(overview) 캐시 TTL — 기본 7일(거의 정적)
+    # memory 백엔드 엔트리 상한 — 만료됐지만 재조회되지 않는 키가 쌓이는 것을 막는다.
+    cache_max_entries: int = 10000      # 초과 시 만료분 정리 → 오래된 순 제거
 
     # --- 지역 인메모리 캐시 (존 서버 패턴) ---
     region_cache_max: int = 8           # 동시 상주 지역 수 (LRU)
+    # warm()이 병합이라 지역 워킹셋이 계속 누적된다 → 지역당 노드 수도 LRU로 상한.
+    # 노드당 overview 수 KB 기준, 8지역 × 500노드면 수십 MB 수준.
+    region_cache_nodes_max: int = 500   # 지역당 상주 노드 수 (LRU)
 
     # --- 작업 큐 / 워커 (고처리량 배치) ---
     worker_count: int = 4               # 작업 큐 병렬 소비 워커 수

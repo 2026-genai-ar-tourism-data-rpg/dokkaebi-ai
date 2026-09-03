@@ -16,6 +16,7 @@ async def context_load(state: DialogueState) -> dict:
     """
     node_id = state.get("node_id", "")
     cache = get_region_cache()
-    text = cache.get_text(node_id)  # 미스 시 None (리빌드 책임은 cache 내부 TODO)
+    # 미스 시 cache가 TourAPI 재조회까지 시도. region_id를 주면 그 지역 워킹셋에 편입된다.
+    text = await cache.get_text(node_id, region_id=state.get("region_id", ""))
     # TODO(박준형): 텍스트가 컨텍스트 한도 초과/교차검색 필요 시 use_rag=True 로 분기
     return {"context": text or "", "use_rag": False}

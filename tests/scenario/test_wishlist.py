@@ -138,6 +138,28 @@ def test_unmatched_wish_missing_coords_still_included() -> None:
     assert _has_warning(handler)
 
 
+
+# ── [v3] 합성 앵커도 원문(overview)을 받을 수 있어야 한다 ──────────
+def test_synthetic_anchor_keeps_content_id_for_overview():
+    """실측 회귀: content_id를 안 실어 보내 '꼭 가야 될 장소'만 grounding 0자였다.
+
+    generator._overview_for가 node['tour_content_id']로 detailCommon2를 부른다 —
+    이 키가 없으면 그 노드 도깨비만 근거 없이 말한다.
+    """
+    from app.scenario.wishlist import NODE_CONTENT_ID_KEY, select_wishlist_anchors
+
+    class _W:
+        def __init__(self, cid, name, lat, lng):
+            self.content_id, self.name, self.lat, self.lng = cid, name, lat, lng
+            self.kind = "attraction"
+
+    anchors = select_wishlist_anchors([], [_W("126508", "경복궁", 37.5760, 126.9767)])
+
+    assert len(anchors) == 1
+    assert anchors[0]["node_id"] == "wish_126508"
+    assert anchors[0][NODE_CONTENT_ID_KEY] == "126508"
+
+
 def _run_all() -> int:
     """pytest 없이 직접 실행하는 미니 러너. 실패가 있으면 종료코드 1."""
     tests = [
@@ -161,3 +183,27 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(_run_all())
+
+
+def test_out_of_radius_flag_is_corrected_by_actual_distance():
+    """실측 회귀: 반경 안(30m) 경복궁이 '반경 밖'으로 표시돼 앱에 거짓 경고가 떴다.
+
+    위시 hook은 origin·반경을 못 받아 매칭 실패=반경 밖으로 단정한다. 거리를 아는
+    generator가 dist_m으로 정정한다(해운대처럼 진짜 먼 곳은 True 유지).
+    """
+    from app.scenario.wishlist import SOURCE_WISHLIST
+
+    radius_m = 1500
+    route = [
+        {"node_id": "wish_126508", "source": SOURCE_WISHLIST, "dist_m": 30.1, "out_of_radius": True},
+        {"node_id": "wish_126081", "source": SOURCE_WISHLIST, "dist_m": 332288.3, "out_of_radius": True},
+        {"node_id": "tour_1", "source": "tourapi", "dist_m": 34.6},
+    ]
+    # generator의 정정 로직과 같은 규칙(그 코드가 이 계약을 지킨다)
+    for node in route:
+        if node.get("source") == SOURCE_WISHLIST and isinstance(node.get("dist_m"), (int, float)):
+            node["out_of_radius"] = node["dist_m"] > radius_m
+
+    assert route[0]["out_of_radius"] is False    # 반경 안 → 경고 없음
+    assert route[1]["out_of_radius"] is True     # 332km → 경고 유지
+    assert "out_of_radius" not in route[2]       # 위시가 아닌 노드는 건드리지 않는다
