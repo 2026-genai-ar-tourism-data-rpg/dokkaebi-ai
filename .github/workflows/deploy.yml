@@ -1,10 +1,13 @@
 # ============================================================
-# [v1] deploy.yml — main 머지 시 EC2 자동 배포 (ai 서비스만 재빌드)
+# [v2] deploy.yml — main 머지 시 EC2 자동 배포 (ai 서비스만 재빌드)
 # pipeline: 인프라 / CI-CD
-# 구현(요약): main push → SSH로 EC2 접속 → ai 레포 main 동기화 →
-#            compose로 ai 서비스만 빌드·재기동 → 컨테이너 내부 헬스체크.
-#            시크릿: DEPLOY_HOST, DEPLOY_SSH_KEY (org 레벨 권장).
-# 구현일: 2026-08-31 | 작성: kys (deploy-cicd/kys/v1)
+# 구현(요약): main push → 러너 공인 IP를 SG 22포트에 잠시 허용 → SSH로 EC2 접속 →
+#            ai 레포 main 동기화 → compose로 ai 서비스만 빌드·재기동 → 컨테이너 내부 헬스체크
+#            → 성공/실패 무관하게 SG 규칙 회수.
+#            시크릿(레포별): DEPLOY_HOST, DEPLOY_SSH_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+# 구현일: 2026-08-31 | v2 2026-09-04: SG 동적 개방 추가
+#            (Actions 러너 IP가 매번 달라 22포트에서 "dial tcp :22: i/o timeout" 나던 문제)
+# 작성: kys (deploy-cicd/kys/v1 → deploy-sg-open/kys/v1)
 # ============================================================
 name: deploy-ai
 
@@ -17,10 +20,37 @@ concurrency:
   group: deploy-ec2        # ai/server/infra 배포가 EC2에서 겹치지 않게 직렬화
   cancel-in-progress: false
 
+env:
+  AWS_REGION: ap-northeast-2
+  SG_ID: sg-04075e0ba91310e20    # dokkaebi-sg — EC2 인바운드 보안그룹
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
+      - name: Open SSH — allow this runner's IP on port 22
+        id: sg
+        run: |
+          set -e
+          ip=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
+          echo "runner ip: $ip"
+          # 이전 실행이 중간에 죽어 회수되지 못한 gha-* 규칙이 있으면 먼저 정리
+          stale=$(aws ec2 describe-security-group-rules \
+            --filters Name=group-id,Values="$SG_ID" \
+            --query "SecurityGroupRules[?IsEgress==\`false\` && FromPort==\`22\` && starts_with(Description||'', 'gha-')].SecurityGroupRuleId" \
+            --output text)
+          if [ -n "$stale" ]; then
+            echo "revoking stale rules: $stale"
+            aws ec2 revoke-security-group-ingress --group-id "$SG_ID" --security-group-rule-ids $stale
+          fi
+          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" \
+            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=$ip/32,Description=gha-${{ github.run_id }}}]"
+          echo "cidr=$ip/32" >> "$GITHUB_OUTPUT"
+          sleep 5   # SG 반영 대기
+
       - name: Deploy ai to EC2
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -44,3 +74,9 @@ jobs:
               sleep 5
             done
             echo "ai health check failed"; docker compose -f docker-compose.prod.yml logs --tail 100 ai; exit 1
+
+      - name: Close SSH — revoke this runner's rule (always)
+        if: always() && steps.sg.outputs.cidr != ''
+        run: |
+          aws ec2 revoke-security-group-ingress --group-id "$SG_ID" \
+            --protocol tcp --port 22 --cidr "${{ steps.sg.outputs.cidr }}"
