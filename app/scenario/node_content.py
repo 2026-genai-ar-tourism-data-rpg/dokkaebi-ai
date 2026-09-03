@@ -12,9 +12,18 @@
 #            assign_mission_type은 하위호환 보존 — 신규 경로는 node_schema.select_mission_type
 #            (동기→허용 전략→미션 타입, 미션 텍스트↔액션 모순 차단).
 # 구현일: 2026-07-30 | 작성: pjh (node-schema-gen/pjh/v1)
+# ------------------------------------------------------------
+# [v3] 미션 생성 실패를 조용히 삼키지 않는다 — 실패는 예외로 올린다.
+# 구현(요약): generate_mission이 LLM 오류·JSON 파싱 실패를 잡아 제네릭 미션으로
+#            바꿔 돌려주는 바람에 호출측이 "생성됐지만 내용이 텅 빈" 미션을 그대로
+#            내보냈다 → MissionGenerationError를 raise하고, 제네릭 폴백은
+#            generic_mission()으로 분리(폴백 자체는 그대로 유지). 재시도·폴백 결정은
+#            generator._content_for가 한다. feedback= 인자로 QA 재생성 지시를 싣는다.
+# 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import json
 
+from app.core.exceptions import MissionGenerationError
 from app.core.logger import get_logger
 from app.llm.client import get_llm
 
@@ -127,16 +136,31 @@ _PROMPTS = {
 }
 
 
-async def generate_mission(name: str, overview: str, mtype: str) -> dict:
-    """타입별 미션 콘텐츠 생성. 실패해도 폴백(항상 order+hints 보장)."""
+async def generate_mission(name: str, overview: str, mtype: str, *, feedback: str = "") -> dict:
+    """타입별 미션 콘텐츠 생성. 실패는 **MissionGenerationError로 올린다**.
+
+    feedback: 직전 출력이 QA를 통과하지 못한 이유(재생성 지시). 비어 있으면 최초 생성.
+    ⚠️ 예전에는 실패를 안에서 삼켜 제네릭 미션을 돌려줬다 — 호출측이 실패를 알 수 없어
+       재시도도, 사용자 고지도 불가능했다. 폴백은 generic_mission()으로 분리했다.
+    """
     prompt = _PROMPTS.get(mtype, _PROMPTS["FIND"]).format(name=name, overview=(overview or "")[:1500])
+    if feedback:
+        prompt += f"\n[재작성 지시] {feedback}\n같은 실수를 반복하지 말고 JSON만 다시 출력하라."
     try:
         raw = await _llm.generate(prompt)
-        data = _json(raw) or {}
     except Exception as e:
-        logger.warning("미션 생성 실패(%s) %s: %s", mtype, name, e)
-        data = {}
+        logger.warning("미션 생성 LLM 호출 실패(%s) %s: %s", mtype, name, e)
+        raise MissionGenerationError(f"LLM 호출 실패: {e}") from e
+    data = _json(raw)
+    if data is None:
+        logger.warning("미션 생성 JSON 파싱 실패(%s) %s", mtype, name)
+        raise MissionGenerationError("LLM 출력 JSON 파싱 실패")
     return _normalize(mtype, data, name)
+
+
+def generic_mission(name: str, mtype: str) -> dict:
+    """생성 실패 시 제네릭 폴백 미션 — 기존 폴백 동작 그대로(항상 order+hints 보장)."""
+    return _normalize(mtype, {}, name)
 
 
 def _json(raw: str) -> dict | None:
