@@ -42,6 +42,11 @@ _TEXT_SLOTS = [(i, s["speaker"]) for i, s in enumerate(_SKELETON) if s["speaker"
 
 _ROLE_LABEL = {"narration": "내레이션", "npc": "NPC(수호 도깨비)", "player": "플레이어"}
 
+# 기본 llm_max_tokens(512, config.py)는 노드 1개짜리 짧은 미션/대사용 — 20줄 JSON
+# 전체를 채우기엔 부족해 응답이 중간에 잘리고 JSON 파싱이 통째로 실패했다(실측).
+# 이 호출에서만 넉넉하게 늘린다(다른 LLM 호출의 전역 기본값은 그대로 둔다).
+_MAX_TOKENS = 1200
+
 _PLOT = (
     "너는 한국 전통 설화풍 AR 게임 '도깨비'의 오프닝 대본 작가다.\n"
     "고정 설정(바꾸지 마라): 망각귀가 이 땅의 기억석을 깨뜨렸다. 플레이어는 우연히 깨진 기억석의 푸른 빛을 "
@@ -53,8 +58,9 @@ _PLOT = (
     "플레이어 이름 자리는 채우지 말고 리터럴 문자열 {{name}}을 그대로 남겨라(다른 시스템이 나중에 치환한다).\n"
 )
 _FORMAT = (
-    "아래 {n}개 대사 슬롯을 순서대로, 화자에 맞게 채워라(각 1~2문장, 짧게):\n{roles}\n"
-    '다른 말 없이 아래 JSON만 출력: {{"lines": ["<슬롯1 텍스트>", "<슬롯2 텍스트>", "..."]}} (배열 길이 = {n})'
+    "아래 {n}개 대사 슬롯을 화자에 맞게 채워라(각 1~2문장, 짧게):\n{roles}\n"
+    '다른 말 없이 아래 JSON만 출력하고, 키는 반드시 "1"부터 "{n}"까지 전부 채워라(다른 키 추가 금지): '
+    '{{"lines": {{"1": "<슬롯1 텍스트>", "2": "<슬롯2 텍스트>", "{n}": "<슬롯{n} 텍스트>"}}}}'
 )
 
 # 폴백(A안): 원래 종로 고정 대본에서 지역명만 반영. LLM 실패해도 항상 이 24줄을 보장한다.
@@ -122,14 +128,20 @@ async def generate_prologue(region: str, first_node: dict | None) -> list[dict]:
         n=len(_TEXT_SLOTS), roles=_role_note()
     )
     try:
-        raw = await _llm.generate(prompt)
+        raw = await _llm.generate(prompt, max_tokens=_MAX_TOKENS)
         data = _json(raw) or {}
         lines = data.get("lines")
-        if not isinstance(lines, list) or len(lines) != len(_TEXT_SLOTS):
-            raise ValueError(f"슬롯 수 불일치(기대 {len(_TEXT_SLOTS)}, 실제 {lines!r})")
-        texts = [str(t).strip() for t in lines]
-        if any(not t for t in texts):
-            raise ValueError("빈 슬롯 존재")
+        if not isinstance(lines, dict):
+            raise ValueError(f"lines가 키-값 객체가 아님: {type(lines).__name__}")
+        # 키 번호로 찾는다(배열 길이 매칭 대신) — LLM이 여벌 항목을 더 붙여도(#21 등)
+        # 1~n번 키만 다 있으면 그대로 쓴다. 실측: 딱 배열 길이만 요구했더니 20개 요청에
+        # 21개를 반환해 멀쩡한 결과를 통째로 버리고 폴백하는 사례가 있었다.
+        texts = []
+        for i in range(1, len(_TEXT_SLOTS) + 1):
+            t = lines.get(str(i))
+            if not isinstance(t, str) or not t.strip():
+                raise ValueError(f"슬롯 {i}번 누락/빈 값")
+            texts.append(t.strip())
     except Exception as e:
         logger.warning("프롤로그 생성 실패(지역=%s) → 지역명 치환 폴백: %s", region, e)
         return fallback
