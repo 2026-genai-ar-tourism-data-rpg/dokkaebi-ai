@@ -16,6 +16,10 @@
 # [v4] 시나리오 응답에 qa_flags 추가 — 생성 QA 루프(A1)가 못 고친 결함과 미션 제네릭
 #      폴백을 사람이 읽는 문장으로 내보낸다. default_factory=list라 기존 호출자 무영향.
 # 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v5] 시나리오 응답에 prologue 추가 — 코스 오프닝 대본(화자 순서·연출 비트는 고정,
+#      대사만 region·첫 장소로 생성). default_factory=list라 기존 호출자 무영향.
+# 구현일: 2026-09-04 | 작성: Claude (prologue-story-gen/claude/v1)
 # ============================================================
 from pydantic import BaseModel, Field
 
@@ -121,6 +125,13 @@ class ScenarioGenRequest(BaseModel):
     with_branching: bool = False        # 갈림길(route 분기) 트리 생성(#24). 기본 off=선형
 
 
+class PrologueLineSchema(BaseModel):
+    """프롤로그 대본 한 줄. speaker=beat면 text 없이 연출 트리거(beat)만 채워진다."""
+    speaker: str                                          # narration | npc | player | beat
+    text: str = ""
+    beat: str | None = None                                # speaker=="beat"일 때만(reach|reveal|recoil|longing)
+
+
 class ScenarioGenResponse(BaseModel):
     """시나리오 생성 응답(노드 시퀀스 + 메타). node_sequence는 퀘스트 dict 배열."""
     scenario_id: str
@@ -145,6 +156,9 @@ class ScenarioGenResponse(BaseModel):
     # 생성 품질 경고(A1 QA 루프가 못 고친 결함·미션 제네릭 폴백). 정상 생성이면 [].
     # 하위호환: 기존 호출자는 이 키를 몰라도 되고, 없으면 빈 배열로 나간다.
     qa_flags: list[str] = Field(default_factory=list)
+    # 코스 오프닝 프롤로그 대본(화자 순서·연출 비트 고정, 대사만 region·첫 장소로 생성).
+    # 하위호환: 없으면 빈 배열 — 앱은 이 경우 자체 정적 텍스트로 폴백.
+    prologue: list[PrologueLineSchema] = Field(default_factory=list)
 
 
 # --- 관광지 검색 (앵커 자동완성) ---
