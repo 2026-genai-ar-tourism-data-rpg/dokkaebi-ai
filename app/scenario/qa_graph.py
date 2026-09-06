@@ -8,19 +8,33 @@
 #
 #   START → qa ─┬─ PASS ─────────────────────────→ END
 #               ├─ answer_leak ─→ regen_mission ─→ qa
-#               ├─ tone/환각 ───→ regen_dialogue → qa
+#               ├─ tone ────────→ regen_dialogue → qa
 #               └─ 재생성 초과 / 계약위반 ─→ flag → END
 #
 # 설계 메모:
 # - 전체 시나리오 생성기를 그래프로 옮기지 않는다. **이 QA 루프만** 별도 subgraph다.
 # - run_qa의 판정 기준은 손대지 않는다(node_schema). 여기서는 '무엇을 다시 만들지'만 정한다.
 # - answer_leak = 힌트에 퀴즈 정답이 샌 것 → 미션/힌트만 다시 만든다(대사는 멀쩡하다).
-# - tone/hallucination = 대사 문제 → 대사만 다시 만든다(미션은 멀쩡하다).
+# - tone = 대사 문제 → 대사만 다시 만든다(미션은 멀쩡하다).
+# - hallucination = 게이트 아님(v2) → 재생성 없이 경고만 남긴다.
 # - contract 위반은 LLM 문장 품질이 아니라 스키마 결함이다 → 재생성해도 안 고쳐진다.
 #   무의미한 LLM 호출 대신 곧장 flag.
 # - ⚠️ LLMClient의 429 백오프 재시도와 다른 층이다. 여기 재생성 횟수는 '출력 품질'
 #   기준이고, 호출 실패 재시도는 LLMClient가 이미 한다. RetryPolicy로 중복 구현 금지.
 # 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v2] 환각 판정을 **게이트에서 뗀다** — 결함보고 20260904 #2 ① 조치.
+# 구현(요약): 실 LLM 점검에서 run_qa의 환각 판정 정밀도가 0/35(참양성 0건)로 나왔다.
+#            정상 대사 4개가 전부 반려돼 노드마다 재생성 2회를 더 돌았고(대사 호출
+#            4→12회), 그래도 못 고쳐 qa_flags 4건이 매번 응답에 실렸다. 게다가
+#            재생성 프롬프트에 실린 _FB_HALLUCINATION 문구("근거 밖 표현: 감탄사,
+#            3문장…")를 solar-pro가 대사 본문에 복창해 **프롬프트 지시문이 앱 화면까지
+#            새어 나갔다**(결함 #1). 원래 node_schema.run_qa의 주석도 "게이트가 아니라
+#            경고 로그용"이라고 못 박아 뒀다 — 설계 의도로 되돌린다.
+#            · qa_passed에서 hallucination_flag 제외 → 재생성 트리거 아님
+#            · 대사 재생성 지시문에서 _FB_HALLUCINATION 삭제(결함 #1의 유출 경로 차단)
+#            · 판정은 버리지 않는다 — 경고 로그 + qa_flags '경고' 항목으로만 남긴다
+# 구현일: 2026-09-06 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 from typing import Any, TypedDict
 
@@ -43,10 +57,8 @@ _FB_TONE = (
     "직전 대사에 도깨비 말투가 없었다. "
     "'~느니라/~거라/허허/~로다' 같은 도깨비 어미와 감탄을 반드시 넣어 다시 작성하라."
 )
-_FB_HALLUCINATION = (
-    "직전 대사가 [장소 실제 정보]에 없는 내용을 지어냈다(근거 밖 표현: {tokens}). "
-    "주어진 장소 정보에 있는 사실만으로 다시 작성하라."
-)
+# ⚠️ 환각 사유는 재생성 지시문으로 만들지 않는다(v2). 근거 밖 '표현' 목록을 프롬프트에
+#    실어 보내면 모델이 그 목록을 대사에 그대로 복창한다(실측: 결함보고 20260904 #1).
 
 
 class QAState(TypedDict, total=False):
@@ -62,13 +74,23 @@ class QAState(TypedDict, total=False):
 
 
 def qa_passed(qa: dict[str, Any]) -> bool:
-    """run_qa 결과가 전부 통과인가. 판정 기준은 run_qa 그대로 — 여기서 바꾸지 않는다."""
+    """재생성이 필요한 결함이 있는가(없으면 True).
+
+    ⚠️ hallucination_flag는 여기 들어오지 않는다(v2). 휴리스틱 환각 판정은 정밀도가
+    낮아 게이트로 쓰면 정상 대사를 반려하고, 그 반려 사유가 프롬프트를 통해 대사로
+    새어 나온다. 판정 결과는 버리지 않고 경고(qa_flags)로만 남긴다 — hallucination_only
+    참조.
+    """
     return not (
         qa.get("answer_leak")
         or not qa.get("tone_ok")
-        or qa.get("hallucination_flag")
         or not qa.get("contract_ok")
     )
+
+
+def hallucination_only(qa: dict[str, Any]) -> bool:
+    """재생성 대상 결함은 없고 환각 경고만 남은 상태인가(→ flag로 경고만 기록)."""
+    return qa_passed(qa) and bool(qa.get("hallucination_flag"))
 
 
 async def qa(state: QAState) -> dict:
@@ -76,9 +98,12 @@ async def qa(state: QAState) -> dict:
     quest = state["quest"]
     result = run_qa(quest, state.get("source") or {})
     if not qa_passed(result):
-        flags = {k: result[k] for k in ("answer_leak", "tone_ok", "hallucination_flag", "contract_ok")}
-        logger.warning("QA 플래그 %s(%s): %s unsupported=%s",
-                       quest.get("node_id"), quest.get("name"), flags, result["unsupported_tokens"])
+        flags = {k: result[k] for k in ("answer_leak", "tone_ok", "contract_ok")}
+        logger.warning("QA 플래그 %s(%s): %s", quest.get("node_id"), quest.get("name"), flags)
+    if result.get("hallucination_flag"):
+        # 재생성하지 않는다(v2) — 사람이 뒤에서 확인할 수 있게 근거만 남긴다.
+        logger.warning("QA 환각 경고(재생성 안 함) %s(%s): 근거 밖 주장=%s",
+                       quest.get("node_id"), quest.get("name"), result.get("unsupported_tokens"))
     return {"qa": result}
 
 
@@ -110,7 +135,7 @@ async def regen_mission(state: QAState) -> dict:
 
 
 async def regen_dialogue(state: QAState) -> dict:
-    """[노드] 말투/환각 → **NPC 대사만** 다시 생성. 미션은 건드리지 않는다."""
+    """[노드] 말투 → **NPC 대사만** 다시 생성. 미션은 건드리지 않는다(환각은 v2에서 제외)."""
     quest = dict(state["quest"])
     source = state.get("source") or {}
     count = state.get("qa_retry_count", 0) + 1
@@ -145,8 +170,9 @@ async def flag(state: QAState) -> dict:
     if not result.get("tone_ok", True):
         flags.append(f"{name}: NPC 대사에 도깨비 말투 미검출 {suffix}")
     if result.get("hallucination_flag"):
+        # v2: 재생성 대상이 아니다 — 확인용 경고임을 문구로 못 박는다.
         tokens = ", ".join(result.get("unsupported_tokens") or [])
-        flags.append(f"{name}: 장소 정보 밖 표현 과다 {suffix} — {tokens}")
+        flags.append(f"{name}: [경고] 원문에 없는 주장 — {tokens} (재생성하지 않음, 확인 필요)")
     if not result.get("contract_ok", True):
         flags.append(f"{name}: 앱 노드 계약 위반 — 재생성으로 해결되지 않음(스키마 점검 필요)")
     return {"qa_flags": flags}
@@ -156,13 +182,14 @@ def _route_after_qa(state: QAState) -> str:
     """조건 엣지: PASS면 종료 / 실패 원인별로 재생성 대상 선택 / 상한 초과·계약위반이면 flag."""
     result = state.get("qa") or {}
     if qa_passed(result):
-        return END
+        # 환각만 남았으면 재생성 없이 flag에서 경고만 적고 끝낸다(v2).
+        return "flag" if hallucination_only(result) else END
     if state.get("qa_retry_count", 0) >= state.get("qa_max_regen", 0):
         return "flag"
     if result.get("answer_leak"):
         return "regen_mission"            # 정답 유출 = 미션/힌트 문제
-    if not result.get("tone_ok", True) or result.get("hallucination_flag"):
-        return "regen_dialogue"           # 말투·환각 = 대사 문제
+    if not result.get("tone_ok", True):
+        return "regen_dialogue"           # 말투 = 대사 문제
     return "flag"                         # 계약 위반만 남은 경우 — LLM이 고칠 수 없다
 
 
@@ -219,11 +246,9 @@ def _leaked_answer(quest: dict) -> str:
 
 
 def _dialogue_feedback(result: dict) -> str:
-    """대사 재생성 지시문 — 말투·환각 각각의 사유를 합쳐 전달한다."""
-    parts = []
-    if not result.get("tone_ok", True):
-        parts.append(_FB_TONE)
-    if result.get("hallucination_flag"):
-        tokens = ", ".join((result.get("unsupported_tokens") or [])[:5])
-        parts.append(_FB_HALLUCINATION.format(tokens=tokens))
-    return " ".join(parts)
+    """대사 재생성 지시문 — 현재는 말투 사유뿐이다.
+
+    ⚠️ 환각 사유(근거 밖 표현 목록)를 여기 다시 넣지 말 것. 모델이 그 목록을 대사에
+    복창해 프롬프트가 앱 화면으로 샌다(결함보고 20260904 #1).
+    """
+    return _FB_TONE if not result.get("tone_ok", True) else ""

@@ -3,12 +3,16 @@
 # pipeline: AI 백엔드 / 시나리오 (생성 품질 회귀 방지, 네트워크·실 LLM 0)
 # 커버: ① QA 최초 실패 → 1회 재생성 → PASS(재생성 1회·피드백 전달·qa_flags 없음)
 #       ② QA 계속 실패 → 재생성 상한 2회 · QA 검사 3회 · qa_flags 생성
-#       ③ 실패 원인별 재생성 대상 분리(정답유출=미션 / 말투·환각=대사)
+#       ③ 실패 원인별 재생성 대상 분리(정답유출=미션 / 말투=대사)
+#       ③-1 환각은 재생성 트리거가 아니다 — 경고만 남긴다(v2, 결함보고 20260904 #2)
 #       ④ 계약 위반은 LLM 재생성 없이 flag
 #       ⑤ 미션 생성 실패 → 1회 재시도 성공(호출 2회·제네릭 폴백 미사용)
 #       ⑥ 미션 재시도까지 실패 → 기존 제네릭 폴백 + qa_flags 기록
 #       ⑦ 응답 DTO qa_flags 기본값 []
 # 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v2] 환각 게이트 해제 회귀 테스트 추가 — qa_graph v2 대응.
+# 구현일: 2026-09-06 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import asyncio
 
@@ -69,7 +73,7 @@ def _qa_result(*, answer_leak=False, tone_ok=True, hallucination=False, contract
         "answer_leak": answer_leak,
         "tone_ok": tone_ok,
         "hallucination_flag": hallucination,
-        "unsupported_tokens": ["우주선", "공룡화석", "피라미드"] if hallucination else [],
+        "unsupported_tokens": ["1919년", "첨성대", "석굴암"] if hallucination else [],
         "contract_ok": contract_ok,
     }
 
@@ -175,13 +179,13 @@ def test_정답유출이면_미션만_재생성한다(monkeypatch):
     assert flags == []
 
 
-def test_말투_환각이면_대사만_재생성한다(monkeypatch):
+def test_말투가_틀리면_대사만_재생성한다(monkeypatch):
     calls = _patch_regen(monkeypatch)
     checks = {"n": 0}
 
     def fake_run_qa(node, source):
         checks["n"] += 1
-        return _qa_result(hallucination=checks["n"] == 1)
+        return _qa_result(tone_ok=checks["n"] > 1)
 
     monkeypatch.setattr(qa_graph, "run_qa", fake_run_qa)
 
@@ -189,9 +193,49 @@ def test_말투_환각이면_대사만_재생성한다(monkeypatch):
 
     assert len(calls["dialogue"]) == 1
     assert calls["mission"] == []                        # 미션은 건드리지 않는다
-    assert "우주선" in calls["dialogue"][0]               # 근거 밖 표현을 짚어 준다
+    assert "도깨비" in calls["dialogue"][0]               # 말투 사유를 짚어 준다
     assert quest["mission"]["order"] == "운현궁의 현판을 살펴 파편을 찾아라."
     assert flags == []
+
+
+# ── ③-1 환각은 게이트가 아니다(v2) ────────────────────────────────────
+
+
+def test_환각은_재생성하지_않고_경고만_남긴다(monkeypatch):
+    """실측 정밀도 0/35 — 게이트로 쓰면 정상 대사를 3배 비용으로 다시 만든다."""
+    calls = _patch_regen(monkeypatch)
+    checks = {"n": 0}
+
+    def fake_run_qa(node, source):
+        checks["n"] += 1
+        return _qa_result(hallucination=True)
+
+    monkeypatch.setattr(qa_graph, "run_qa", fake_run_qa)
+
+    quest, flags = asyncio.run(qa_graph.run_qa_loop(_quest(), _source()))
+
+    assert checks["n"] == 1                              # 재검사 없음 — 루프를 돌지 않는다
+    assert calls["dialogue"] == [] and calls["mission"] == []
+    assert quest["npc_dialogue"] == "허허, 이곳의 흔적을 살펴보거라."   # 대사 그대로
+    assert flags and all("경고" in f for f in flags)      # 사유는 남되 '경고'로만
+
+
+def test_환각_사유는_재생성_프롬프트에_실리지_않는다(monkeypatch):
+    """결함 #1의 유출 경로 — 근거 밖 표현 목록을 프롬프트에 실으면 모델이 복창한다."""
+    calls = _patch_regen(monkeypatch)
+    checks = {"n": 0}
+
+    def fake_run_qa(node, source):
+        checks["n"] += 1
+        return _qa_result(tone_ok=checks["n"] > 1, hallucination=True)
+
+    monkeypatch.setattr(qa_graph, "run_qa", fake_run_qa)
+
+    asyncio.run(qa_graph.run_qa_loop(_quest(), _source()))
+
+    assert len(calls["dialogue"]) == 1
+    assert "첨성대" not in calls["dialogue"][0]
+    assert "근거 밖" not in calls["dialogue"][0]
 
 
 def test_계약위반은_재생성_없이_flag한다(monkeypatch):
