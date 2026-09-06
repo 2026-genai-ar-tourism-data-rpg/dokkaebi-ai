@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>도깨비 AI 연동 결함 보고</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Sans+KR:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+
+<style>
+/* ─────────────────────────────────────────────────────────────
+   팔레트: 단청(丹靑) 계열 — 청록을 축으로, 중성색도 청록 쪽으로 살짝 기울임
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --ground:      #f4f6f5;
+  --surface:     #ffffff;
+  --surface-alt: #eceff0;
+  --ink:         #16211f;
+  --ink-soft:    #4a5a58;
+  --ink-faint:   #7d8c8a;
+  --rule:        #d3dad9;
+  --rule-soft:   #e3e8e7;
+
+  --teal:        #0d5b57;   /* 청록 — 강조 */
+  --teal-soft:   #dbeae8;
+  --crit:        #a8331f;   /* 주홍 — 치명 */
+  --crit-soft:   #f6e2de;
+  --warn:        #94651c;   /* 황토 — 높음 */
+  --warn-soft:   #f6ecd8;
+  --mid:         #4a5a58;   /* 중간 */
+  --mid-soft:    #e4eae9;
+  --ok:          #1f6b4a;
+  --ok-soft:     #dcece4;
+
+  --shadow: 0 1px 2px rgba(22,33,31,.05), 0 6px 18px rgba(22,33,31,.05);
+
+  --measure: 68ch;
+  --f-display: "Gowun Batang", "Nanum Myeongjo", Georgia, serif;
+  --f-body: "IBM Plex Sans KR", -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:      #0f1514;
+    --surface:     #161e1d;
+    --surface-alt: #1d2726;
+    --ink:         #e6edeb;
+    --ink-soft:    #a5b4b1;
+    --ink-faint:   #788885;
+    --rule:        #2c3a38;
+    --rule-soft:   #232e2d;
+
+    --teal:        #6fc7bd;
+    --teal-soft:   #143331;
+    --crit:        #e2836e;
+    --crit-soft:   #35201b;
+    --warn:        #d8ac5a;
+    --warn-soft:   #322817;
+    --mid:         #9fb0ad;
+    --mid-soft:    #212c2b;
+    --ok:          #6dbf95;
+    --ok-soft:     #14291f;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"] {
+  --ground:      #0f1514;
+  --surface:     #161e1d;
+  --surface-alt: #1d2726;
+  --ink:         #e6edeb;
+  --ink-soft:    #a5b4b1;
+  --ink-faint:   #788885;
+  --rule:        #2c3a38;
+  --rule-soft:   #232e2d;
+
+  --teal:        #6fc7bd;
+  --teal-soft:   #143331;
+  --crit:        #e2836e;
+  --crit-soft:   #35201b;
+  --warn:        #d8ac5a;
+  --warn-soft:   #322817;
+  --mid:         #9fb0ad;
+  --mid-soft:    #212c2b;
+  --ok:          #6dbf95;
+  --ok-soft:     #14291f;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-weight: 300;
+  font-size: 15px;
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 56px 28px 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 44px;
+}
+
+/* ── 표제 ───────────────────────────────────────────────────── */
+.masthead { display: flex; flex-direction: column; gap: 18px; }
+
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+.masthead h1 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: clamp(30px, 5.2vw, 44px);
+  line-height: 1.24;
+  letter-spacing: -.01em;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.standfirst {
+  max-width: var(--measure);
+  font-size: 16px;
+  color: var(--ink-soft);
+  margin: 0;
+}
+.standfirst strong { color: var(--ink); font-weight: 600; }
+
+.runmeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 28px;
+  padding-top: 18px;
+  border-top: 2px solid var(--ink);
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.runmeta span b { color: var(--ink-soft); font-weight: 500; }
+
+/* ── 섹션 공통 ──────────────────────────────────────────────── */
+section { display: flex; flex-direction: column; gap: 18px; }
+
+h2 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 22px;
+  margin: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+
+p { margin: 0; max-width: var(--measure); }
+p + p { margin-top: 12px; }
+
+/* ── 한눈에 보는 표 ─────────────────────────────────────────── */
+.tablewrap { overflow-x: auto; }
+
+table.summary {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.summary th {
+  text-align: left;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 0 14px 8px 0;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+table.summary td {
+  padding: 13px 14px 13px 0;
+  border-bottom: 1px solid var(--rule-soft);
+  vertical-align: top;
+}
+table.summary td:first-child {
+  font-family: var(--f-mono);
+  color: var(--ink-faint);
+  font-size: 13px;
+  padding-right: 18px;
+}
+table.summary td.what { font-weight: 500; color: var(--ink); }
+table.summary td.who { color: var(--ink-soft); white-space: nowrap; }
+
+/* ── 심각도 칩 ──────────────────────────────────────────────── */
+.sev {
+  display: inline-block;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  padding: 2px 9px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.sev-crit { background: var(--crit-soft); color: var(--crit); }
+.sev-warn { background: var(--warn-soft); color: var(--warn); }
+.sev-mid  { background: var(--mid-soft);  color: var(--mid);  }
+.sev-ok   { background: var(--ok-soft);   color: var(--ok);   }
+
+/* ── 결함 카드 ──────────────────────────────────────────────── */
+.findings { display: flex; flex-direction: column; gap: 26px; }
+
+.finding {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--mid);
+  border-radius: 2px;
+  padding: 24px 26px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow);
+}
+.finding.crit { border-left-color: var(--crit); }
+.finding.warn { border-left-color: var(--warn); }
+.finding.mid  { border-left-color: var(--mid); }
+
+.f-head { display: flex; flex-direction: column; gap: 9px; }
+
+.f-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.f-num {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  color: var(--ink-faint);
+}
+
+.finding h3 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 20px;
+  line-height: 1.4;
+  margin: 0;
+  text-wrap: balance;
+}
+
+/* 레이블 + 본문 행 */
+.rows { display: flex; flex-direction: column; gap: 14px; }
+.row { display: grid; grid-template-columns: 68px 1fr; gap: 16px; align-items: start; }
+.row > dt {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding-top: 5px;
+}
+.row > dd { margin: 0; max-width: var(--measure); }
+@media (max-width: 560px) {
+  .row { grid-template-columns: 1fr; gap: 5px; }
+  .row > dt { padding-top: 0; }
+}
+
+code {
+  font-family: var(--f-mono);
+  font-size: .88em;
+  background: var(--surface-alt);
+  padding: 1px 5px;
+  border-radius: 3px;
+  word-break: break-word;
+}
+
+/* ── 증거 블록 ──────────────────────────────────────────────── */
+.evidence {
+  background: var(--surface-alt);
+  border-left: 2px solid var(--rule);
+  border-radius: 0 3px 3px 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+}
+.evidence pre {
+  margin: 0;
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  line-height: 1.66;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.evidence pre .leak { color: var(--crit); font-weight: 500; }
+.evidence pre .ok   { color: var(--ok); }
+.ev-cap {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+  display: block;
+}
+
+/* ── 토큰 분해 표 (결함 2 근거) ─────────────────────────────── */
+table.breakdown {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+table.breakdown th {
+  text-align: left;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 0 12px 7px 0;
+  border-bottom: 1px solid var(--rule);
+}
+table.breakdown td {
+  padding: 9px 12px 9px 0;
+  border-bottom: 1px solid var(--rule-soft);
+  vertical-align: top;
+}
+table.breakdown td.n {
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  padding-right: 20px;
+  color: var(--ink);
+}
+table.breakdown td.ex {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+table.breakdown tr.total td {
+  border-bottom: none;
+  border-top: 2px solid var(--ink);
+  font-weight: 600;
+  color: var(--crit);
+}
+table.breakdown tr.total td.n { color: var(--crit); }
+
+/* ── 정상 동작 목록 ─────────────────────────────────────────── */
+.checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 1px;
+  background: var(--rule-soft);
+  border: 1px solid var(--rule-soft);
+}
+.check {
+  background: var(--surface);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.check .name { font-family: var(--f-mono); font-size: 12.5px; color: var(--ink); }
+.check .note { font-size: 12.5px; color: var(--ink-faint); }
+
+/* ── 부록 리스트 ────────────────────────────────────────────── */
+ul.minor { margin: 0; padding-left: 20px; max-width: var(--measure); }
+ul.minor li { margin-bottom: 9px; }
+ul.minor li::marker { color: var(--ink-faint); }
+
+.repro {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 18px 20px;
+}
+
+footer {
+  border-top: 1px solid var(--rule);
+  padding-top: 18px;
+  font-family: var(--f-mono);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  line-height: 1.8;
+}
+
+/* ── 인쇄(PDF 내보내기) ─────────────────────────────────────── */
+@media print {
+  :root {
+    --ground: #ffffff; --surface: #ffffff; --surface-alt: #f2f4f4;
+    --ink: #101817; --ink-soft: #3c4a48; --ink-faint: #6b7a78;
+    --rule: #c4cdcc; --rule-soft: #dde3e2; --shadow: none;
+  }
+  body { font-size: 11.5pt; line-height: 1.6; background: #fff; }
+  .page { max-width: none; padding: 0; gap: 30px; }
+  .finding { break-inside: avoid; page-break-inside: avoid; box-shadow: none; }
+  .evidence, .repro, table { break-inside: avoid; }
+  h2 { break-after: avoid; }
+  section { break-inside: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+/* PDF 인쇄 여백 */
+@page { size: A4; margin: 15mm 14mm; }
+</style>
+</head>
+<body>
+
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">dokkaebi-ai · 실 LLM 연동 점검</div>
+    <h1>실제 LLM을 붙이자 드러난 결함 5건</h1>
+    <p class="standfirst">
+      Upstage 실키(<code>solar-pro</code>)와 TourAPI 실키를 꽂고 앱이 실제로 보내는 요청 그대로
+      전 엔드포인트를 돌렸습니다. <strong>모든 엔드포인트가 200으로 응답합니다</strong> —
+      죽는 곳은 없습니다. 대신 mock 프로바이더에서는 절대 재현되지 않던 문제 2건과,
+      앱↔AI 계약이 어긋나 사용자 입력이 조용히 버려지는 문제 3건이 나왔습니다.
+    </p>
+    <div class="runmeta">
+      <span><b>점검일</b> 2026-09-04</span>
+      <span><b>브랜치</b> agent-qa/pjh/v1</span>
+      <span><b>AI</b> dokkaebi-ai @ ef427c3</span>
+      <span><b>앱</b> dokkaebi-app @ main</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>한눈에</h2>
+    <div class="tablewrap">
+      <table class="summary">
+        <thead>
+          <tr>
+            <th>#</th><th>결함</th><th>심각도</th><th>사용자에게 보이는 결과</th><th>고칠 곳</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td class="what">NPC 대사에 프롬프트 지시문이 그대로 출력</td>
+            <td><span class="sev sev-crit">치명</span></td>
+            <td>도깨비가 <code>[규칙 준수]</code> 목록을 읽어 줌 (4개 노드 중 3개)</td>
+            <td class="who">AI</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td class="what">QA 환각 판정이 100% 오탐 → 1번의 원인</td>
+            <td><span class="sev sev-crit">치명</span></td>
+            <td>생성 시간·비용 3배, 품질 경고 4건이 매번 따라 나감</td>
+            <td class="who">AI</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td class="what">마법사 입력 4개가 앱에서 전송되지 않음</td>
+            <td><span class="sev sev-warn">높음</span></td>
+            <td>시간·동행·난이도·취향을 골라도 코스가 안 변함</td>
+            <td class="who">앱 + 서버</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td class="what">식음 노드가 구조적으로 0개 → 예산 UI 무효</td>
+            <td><span class="sev sev-warn">높음</span></td>
+            <td>“식음 포함”·“예산 3만원”이 결과에 아무 영향 없음</td>
+            <td class="who">AI 설정</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td class="what">대화 API에 <code>branch</code>·<code>kind</code> 미전송</td>
+            <td><span class="sev sev-mid">중간</span></td>
+            <td>지금은 잠복 — 갈림길·식음을 켜는 순간 발현</td>
+            <td class="who">앱</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>결함 상세</h2>
+    <div class="findings">
+
+      <!-- 1 -->
+      <article class="finding crit">
+        <div class="f-head">
+          <div class="f-tags">
+            <span class="f-num">결함 01</span>
+            <span class="sev sev-crit">치명</span>
+            <span>담당: AI</span>
+            <span>실제 LLM 전용 · mock 미재현</span>
+          </div>
+          <h3>도깨비가 대사 대신 프롬프트 규칙을 읽어 줍니다</h3>
+        </div>
+
+        <dl class="rows">
+          <div class="row">
+            <dt>증상</dt>
+            <dd>앱이 보내는 본문 그대로 <code>POST /v1/scenarios</code>를 호출하니, 노드 4개 중 3개의
+              <code>npc_dialogue</code>에 프롬프트 지시문이 섞여 나왔습니다. 이 값은
+              <code>QuestNode.npcDialogue</code>로 앱 화면에 그대로 표시됩니다.</dd>
+          </div>
+          <div class="row">
+            <dt>실측</dt>
+            <dd>
+              <div class="evidence">
+                <span class="ev-cap">— 민영환 자결터</span>
+<pre>허허, 이 자리가 바로 민영환 선생이 을사늑약의 치욕을 견디지
+못해 충절로 목숨을 바친 곳이라니라. … 헤아리지 않겠느냐?
+<span class="leak">[규칙 준수]
+- 순국 장소·혈죽 유래·조형물 요소(유서·단검) 등 실제 정보만 기술
+- "~니라" 어미와 감탄사 "허허" 적용
+- 3문장으로 장소 소개 + 가벼운 질문 구성</span></pre>
+              </div>
+              <div class="evidence" style="margin-top:10px">
+                <span class="ev-cap">— 보신각터 / 탑골공원 팔각정</span>
+<pre>… 그 이야기를 듣고 싶으냐?
+<span class="leak">(※ [장소 실제 정보]의 연도·사건·현황만 활용해 재구성.
+   "백성들" 등 추정 표현 삭제)</span>
+
+… 남산 팔각정도 이를 본받았겠다!
+<span class="leak">(장소 정보에 근거해 역사적 사실과 건축적 특징을 강조하며,
+ 감탄사와 거친 어말어미 '~느니라/~겠다'를 유지)</span></pre>
+              </div>
+            </dd>
+          </div>
+          <div class="row">
+            <dt>원인</dt>
+            <dd>결함 2의 오탐이 대사를 반려하면서, 재생성 프롬프트에
+              <code>_FB_HALLUCINATION</code>(“근거 밖 표현: 감탄사, 3문장, …”)을 실어 보냅니다.
+              <code>solar-pro</code>가 그 지시를 대사 본문에 복창합니다. 유출된 텍스트에
+              <em>감탄사·3문장·어말어미</em>처럼 피드백 문구에만 등장하는 단어가 그대로 박혀 있는 것이 증거입니다.</dd>
+          </div>
+          <div class="row">
+            <dt>왜 못<br>걸렀나</dt>
+            <dd>출력 정리 함수 <code>clean_line</code>(<code>app/core/wording.py:32</code>)은 HTML 태그와
+              양끝 따옴표만 걷어냅니다. <code>[규칙 준수]</code> 블록이나 <code>(※ …)</code> 주석을 막는 장치가 없습니다.</dd>
+          </div>
+          <div class="row">
+            <dt>조치</dt>
+            <dd>결함 2를 고치면 원인이 사라집니다. 다만 <code>solar-pro</code>는 단순 인사 요청에도
+              “(간결하게 … 구성해보았습니다)”를 덧붙이는 성향이라, <code>clean_line</code>에 메타 블록 제거를
+              안전망으로 추가하는 것을 권합니다.</dd>
+          </div>
+        </dl>
+      </article>
+
+      <!-- 2 -->
+      <article class="finding crit">
+        <div class="f-head">
+          <div class="f-tags">
+            <span class="f-num">결함 02</span>
+            <span class="sev sev-crit">치명</span>
+            <span>담당: AI</span>
+            <span>결함 1의 근본 원인</span>
+          </div>
+          <h3>QA 환각 판정의 정밀도가 0/35입니다</h3>
+        </div>
+
+        <dl class="rows">
+          <div class="row">
+            <dt>증상</dt>
+            <dd>생성한 4개 노드가 <strong>전부</strong> 환각으로 판정돼, 노드마다 재생성 2회를 더 돌고도
+              해결되지 않은 채 <code>qa_flags</code> 4건이 응답에 실려 나갔습니다.
+              대사 LLM 호출이 <strong>4회 → 12회</strong>로 늘고 생성이 9.6초 걸렸습니다.</dd>
+          </div>
+          <div class="row">
+            <dt>실측</dt>
+            <dd>
+              <p style="margin-bottom:12px">플래그 근거가 된 “근거 밖 표현” 35개를 분해했습니다.</p>
+              <div class="tablewrap">
+                <table class="breakdown">
+                  <thead>
+                    <tr><th>토큰 종류</th><th style="text-align:right">개수</th><th>예시</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>용언 활용형 (서술어)</td><td class="n">11</td>
+                      <td class="ex">세워진 · 복원했으며 · 느껴보겠느냐 · 스며들었고</td>
+                    </tr>
+                    <tr>
+                      <td>문체·부사·형용사</td><td class="n">19</td>
+                      <td class="ex">가벼운 · 끝내주니 · 싶으냐 · 이거야 · 터이니</td>
+                    </tr>
+                    <tr>
+                      <td>프롬프트에서 역류한 말</td><td class="n">4</td>
+                      <td class="ex">감탄사 · 어말어미 · 3문장 · 근거해</td>
+                    </tr>
+                    <tr>
+                      <td>표기 차이</td><td class="n">1</td>
+                      <td class="ex">삼일운동 (원문엔 <code>3·1운동</code>)</td>
+                    </tr>
+                    <tr class="total">
+                      <td>실제 사실 오류</td><td class="n">0</td>
+                      <td class="ex">— 참양성 0건</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </dd>
+          </div>
+          <div class="row">
+            <dt>원인</dt>
+            <dd>판정 로직(<code>app/scenario/node_schema.py:861-894</code>)의 전제가
+              <strong>“대사의 모든 어휘가 TourAPI 원문에 글자 그대로 등장해야 한다”</strong>입니다.
+              한국어 서술어는 원문에 있을 수가 없으므로, 3~4문장짜리 대사는 예외 없이 걸립니다.
+              미지지 어간이 3개만 넘으면 플래그라 대사가 길수록 자동으로 확정입니다.</dd>
+          </div>
+          <div class="row">
+            <dt>왜 테스트<br>는 통과</dt>
+            <dd>기존 회귀 테스트의 픽스처 대사가 한 문장(<code>"운현궁에서 한옥 건축의 흔적을 살펴보거라, 허허."</code>,
+              7토큰)이라 우연히 임계값 아래였습니다. 실제 LLM은 50토큰을 뱉습니다.
+              <strong>테스트가 검증하지 못한 구간이 정확히 “실제 길이의 정상 대사”입니다.</strong></dd>
+          </div>
+          <div class="row">
+            <dt>덤</dt>
+            <dd>스톱워드 필터가 조사 제거 <em>전에만</em> 적용됩니다. <code>"도깨비로"</code>는 목록에 없어 통과한 뒤
+              어간 <code>"도깨비"</code>가 되어 필터를 우회합니다 — 위 실측에 <code>도깨비</code>가 뜬 이유입니다.</dd>
+          </div>
+          <div class="row">
+            <dt>조치</dt>
+            <dd><strong>① 즉시:</strong> 환각 판정을 재생성 트리거에서 떼고 경고 로그로만 남깁니다.
+              <code>node_schema.py</code>의 주석이 이미 <em>“게이트가 아니라 경고 로그용”</em>이라고 못박아 뒀는데
+              <code>qa_graph</code>가 게이트로 배선한 상태입니다 — 설계 의도로 되돌리는 겁니다.
+              이것만으로 결함 1이 사라지고 호출이 12회 → 4회로 돌아옵니다.
+              <strong>② 이후:</strong> 판정을 “검증 가능한 주장”(연도·수치·고유명사)만 보도록 재작성하고,
+              오늘 뽑은 실제 대사 4건을 골든 픽스처로 박아 회귀를 막습니다.</dd>
+          </div>
+        </dl>
+      </article>
+
+      <!-- 3 -->
+      <article class="finding warn">
+        <div class="f-head">
+          <div class="f-tags">
+            <span class="f-num">결함 03</span>
+            <span class="sev sev-warn">높음</span>
+            <span>담당: 앱 + 서버</span>
+          </div>
+          <h3>마법사에서 고른 조건 4개가 서버로 가지 않습니다</h3>
+        </div>
+        <dl class="rows">
+          <div class="row">
+            <dt>증상</dt>
+            <dd>입력확인 화면이 <strong>시간·동행·난이도·취향</strong>을 표로 보여 주지만,
+              생성 요청에는 <code>transport</code>·<code>wishlist</code>·<code>budget</code>·<code>no_meals</code>만 담깁니다.
+              사용자가 “반나절 / 가족 / 어려움 / 역사”를 골라도 결과가 동일합니다.</dd>
+          </div>
+          <div class="row">
+            <dt>원인</dt>
+            <dd>앱의 <code>explore_draft.dart</code>에 <em>“서버 미지원 필드라 로컬에만 보관”</em>이라고 적혀 있는데,
+              AI는 <strong>2026-08-18</strong>에 <code>duration</code>·<code>companion</code>·<code>difficulty</code>·<code>tags</code>·<code>use_fixed_script</code>를
+              모두 받도록 이미 열어 뒀습니다. 앱 쪽 정보가 낡았습니다.</dd>
+          </div>
+          <div class="row">
+            <dt>주의</dt>
+            <dd>서버 <code>ValidationPipe</code>가 <code>whitelist: true</code>라, 앱이 보내도 <strong>서버 DTO에 필드가 없으면
+              조용히 잘려 나갑니다.</strong> 앱·서버를 함께 고쳐야 합니다.</dd>
+          </div>
+          <div class="row">
+            <dt>연쇄</dt>
+            <dd><code>headcount</code>도 같이 누락됩니다. AI에 <code>companion → 인원수</code> 변환이 있는데 입력이 안 오니
+              예산 게이팅이 항상 1인 기준으로 계산됩니다.</dd>
+          </div>
+        </dl>
+      </article>
+
+      <!-- 4 -->
+      <article class="finding warn">
+        <div class="f-head">
+          <div class="f-tags">
+            <span class="f-num">결함 04</span>
+            <span class="sev sev-warn">높음</span>
+            <span>담당: AI 설정</span>
+          </div>
+          <h3>식음 노드가 한 개도 생기지 않아 예산 입력이 무의미합니다</h3>
+        </div>
+        <dl class="rows">
+          <div class="row">
+            <dt>증상</dt>
+            <dd><code>no_meals=false</code>, <code>budget=30000</code>으로 생성해도 식당·카페가 0개입니다.</dd>
+          </div>
+          <div class="row">
+            <dt>실측</dt>
+            <dd>
+              <div class="evidence">
+<pre>INFO | app.scenario.generator | 거리순 시나리오: 후보 30 →
+      관광 4조각 + <span class="leak">식음 0</span> (반경 2000m, 대사=LLM)</pre>
+              </div>
+            </dd>
+          </div>
+          <div class="row">
+            <dt>원인</dt>
+            <dd><code>app/config.py:113</code>의 <code>scenario_food_per_route</code> 기본값이 <code>0</code>(no-op)이고,
+              <code>.env.example</code>에도 이 항목이 없습니다. <code>budget</code>은 식음 가격대 선택 외에는
+              쓰이는 곳이 없어서, <strong>앱의 예산·식음 UI 전체가 결과에 영향을 주지 못합니다.</strong></dd>
+          </div>
+          <div class="row">
+            <dt>조치</dt>
+            <dd><code>DOKKAEBI_SCENARIO_FOOD_PER_ROUTE=2</code>를 <code>.env</code>와 <code>.env.example</code>에 추가하면 살아납니다.
+              켜기 전에 결함 5의 <code>kind</code> 미전송을 먼저 처리해야 식음 노드에서 엉뚱한 대사가 안 나옵니다.</dd>
+          </div>
+        </dl>
+      </article>
+
+      <!-- 5 -->
+      <article class="finding mid">
+        <div class="f-head">
+          <div class="f-tags">
+            <span class="f-num">결함 05</span>
+            <span class="sev sev-mid">중간</span>
+            <span>담당: 앱</span>
+            <span>잠복 — 기능 켜는 순간 발현</span>
+          </div>
+          <h3>대화 API 호출에 갈림길·노드종류 정보가 빠져 있습니다</h3>
+        </div>
+        <dl class="rows">
+          <div class="row">
+            <dt>증상</dt>
+            <dd>앱의 <code>dialogueTurn</code>이 <code>branch</code>·<code>kind</code>·<code>region_id</code>·<code>player_state</code>를 보내지 않습니다.</dd>
+          </div>
+          <div class="row">
+            <dt>영향</dt>
+            <dd><strong><code>branch</code></strong> — AI는 시나리오를 들고 있지 않은 무상태 서비스라, 앱이 갈림길 정보를 실어 줘야
+              분기를 인지합니다. 지금은 <code>with_branching</code>이 꺼져 있어 안 터지지만, 켜는 순간 갈림길 대화가 깨집니다.<br>
+              <strong><code>kind</code></strong> — 식당·카페 노드에서도 “기억석 조각을 찾아라” 대사가 나갑니다. 결함 4를 해결하면 바로 발현됩니다.</dd>
+          </div>
+        </dl>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>정상 확인된 것</h2>
+    <p>결함만 보면 전체가 망가진 것처럼 읽히지만, 실제로는 뼈대가 모두 돌아갑니다.</p>
+    <div class="checks">
+      <div class="check">
+        <span class="name">POST /v1/scenarios</span>
+        <span class="note">200 · 9.6초 · 노드 4개 생성</span>
+      </div>
+      <div class="check">
+        <span class="name">POST /v1/dialogue/turn</span>
+        <span class="note">200 · 1.3초 · 대사·선택지 정상, 유출 없음</span>
+      </div>
+      <div class="check">
+        <span class="name">GET /v1/search</span>
+        <span class="note">200 · TourAPI 실키로 “경복궁” 검색 성공</span>
+      </div>
+      <div class="check">
+        <span class="name">GET /v1/nearby</span>
+        <span class="note">200 · 0.6초 · 거리순 POI + 한 줄 요약</span>
+      </div>
+      <div class="check">
+        <span class="name">위시리스트 앵커</span>
+        <span class="note">지정 장소가 코스에 강제 포함됨</span>
+      </div>
+      <div class="check">
+        <span class="name">이동수단 walk / car</span>
+        <span class="note">반경 산출에 정상 반영</span>
+      </div>
+    </div>
+    <p style="margin-top:6px">
+      참고로 <code>/v1/dialogue/turn</code>의 대사는 깨끗합니다 —
+      <em>“여기가 바로 도성의 시간을 지키던 보신각터니라. 종소리 울리며 새벽을 알렸다는구먼. 허허.”</em>
+      이 경로만 QA 루프를 타지 않기 때문이고, 결함 1·2가 QA 루프에서 비롯됐다는 또 하나의 증거입니다.
+    </p>
+  </section>
+
+  <section>
+    <h2>그 외 확인된 것</h2>
+    <ul class="minor">
+      <li><strong>검색 응답 형태 확인 필요</strong> — 앱은 최상위 배열을 파싱하는데 AI는
+        <code>{"candidates": [...]}</code>를 줍니다. 서버가 벗겨 주는지 확인이 필요합니다
+        (server 레포는 이번 점검 범위 밖).</li>
+      <li><strong>위시 앵커가 반경 안인데도 “반경 밖”으로 처리</strong> — 경복궁은 출발점에서 1.03km(반경 2km 안)인데
+        후보 목록이 거리순 30건으로 잘려 매칭에 실패합니다. 원문 조회 키는 보존되어 대사 품질에는 영향이 없습니다.</li>
+      <li><strong>앱이 <code>qa_flags</code>를 파싱하지 않음</strong> — 생성 품질 경고가 앱까지 오지 않습니다.
+        서버에서만 쓸 값이면 현행 유지로 괜찮습니다.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>재현 방법</h2>
+    <div class="repro">
+      <p style="margin-bottom:12px"><code>.env</code>에 <code>DOKKAEBI_LLM_PROVIDER=upstage</code>와 실제 키가 들어 있어야 합니다.
+        <code>mock</code>으로는 결함 1·2가 재현되지 않습니다.</p>
+      <div class="evidence">
+<pre>uvicorn app.main:app --reload
+
+curl -X POST localhost:8000/v1/scenarios -H 'Content-Type: application/json' -d '{
+  "user_id":"guest",
+  "start":{"lat":37.5703,"lng":126.9856},
+  "end":{"lat":37.5547,"lng":126.9707},
+  "transport":"walk","wishlist":[],"budget":30000,
+  "no_meals":false,"region":"종로","with_dialogue":true }'</pre>
+      </div>
+      <p style="margin-top:12px">응답의 <code>node_sequence[].npc_dialogue</code>와 <code>qa_flags</code>를 보면 결함 1·2가,
+        서버 로그의 <code>QA 플래그 …</code> 경고 줄에서 재생성 횟수가 그대로 보입니다.</p>
+    </div>
+  </section>
+
+  <footer>
+    점검: 앱이 실제로 보내는 요청 본문을 그대로 사용 · LLM은 Upstage solar-pro 실호출 · TourAPI 실키 사용<br>
+    결함 1·2는 AI 레포 단독 수정으로 해결 가능 · 결함 3은 앱·서버 동시 수정 필요 · 결함 4는 설정 한 줄
+  </footer>
+
+</div>
+
+</body>
+</html>

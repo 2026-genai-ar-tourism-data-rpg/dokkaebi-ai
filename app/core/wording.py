@@ -6,6 +6,17 @@
 #            그래프(prompt_assemble)와 분기 대화(branching_service)가 **같이** 쓴다 —
 #            한쪽만 고치면 같은 누출이 다른 경로로 다시 나온다(실측: "clue:x를 들고…").
 # 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
+# ------------------------------------------------------------
+# [v2] 메타 블록 제거 — 결함보고 20260904 #1 조치.
+# 구현(요약): 실 LLM(solar-pro)이 대사 뒤에 '무엇을 어떻게 썼는지'를 덧붙인다. 노드 4개 중
+#            3개의 npc_dialogue에 [규칙 준수] 목록과 (※ …) 주석이 그대로 실려 나갔고,
+#            앱은 이 값을 QuestNode.npcDialogue로 화면에 그린다(= 도깨비가 프롬프트 규칙을
+#            읽어 준다). 근본 원인은 qa_graph v2에서 막았지만, solar-pro는 단순 인사에도
+#            "(간결하게 … 구성해보았습니다)"를 붙이는 성향이라 여기에 안전망을 둔다.
+#            제거 대상: ① [머리말]만 있는 줄과 그 아래 붙는 목록  ② (※ …) 주석 블록
+#                       ③ 줄 끝의 메타 괄호("… (…구성해보았습니다)")
+#            ⚠️ 본문을 통째로 지우지 않는다 — 걷어낸 뒤 남는 게 없으면 원문을 돌려준다.
+# 구현일: 2026-09-06 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import re
 
@@ -28,6 +39,53 @@ _BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.I)
 _TAG_RE = re.compile(r"</?\s*(?:p|div|span|b|i|u|strong|em|ul|ol|li)\s*/?\s*>", re.I)
 _EMPHASIS_RE = re.compile(r"(\*\*|__)(.+?)\1", re.S)
 
+# --- 메타 블록(모델이 덧붙이는 '작업 설명') 판별 [v2] ---
+# ⚠️ 대사 본문에 쓰이는 괄호(「<양반전>」·'미래상상연구실')와 구분해야 한다. 아래는
+#    '괄호/대괄호가 줄을 열고' + '메타 동사가 들어 있을' 때만 걸린다.
+_META_VERBS = (
+    "구성", "작성", "재구성", "반영", "적용", "유지", "삭제", "추가", "강조",
+    "근거해", "근거하여", "지시", "규칙", "요청", "준수", "설명", "표현 삭제",
+)
+# "[규칙 준수]", "[장소 실제 정보]"처럼 대괄호 머리말만 있는 줄.
+_META_HEADER_RE = re.compile(r"^\[[^\[\]]{1,30}\]\s*[:：]?$")
+# 목록 기호로 시작하는 줄 — 머리말 아래에 딸려 오는 항목.
+_BULLET_RE = re.compile(r"^[-*•·–—]\s+")
+# 줄 끝에 붙는 메타 괄호: "…이니라. (간결하게 … 구성해보았습니다)"
+_META_TAIL_RE = re.compile(r"\s*[（(][^（()）]*(?:%s)[^（()）]*[）)]\s*$" % "|".join(_META_VERBS))
+
+
+def _is_meta_start(line: str) -> bool:
+    """이 줄에서 메타 블록이 시작되는가."""
+    if _META_HEADER_RE.match(line):
+        return True
+    if line.startswith("※") or line.startswith("(※") or line.startswith("（※"):
+        return True
+    # 괄호로 줄을 열면서 메타 동사를 담고 있으면 작업 설명이다.
+    return line[:1] in "(（" and any(v in line for v in _META_VERBS)
+
+
+def _strip_meta_blocks(lines: list[str]) -> list[str]:
+    """모델이 덧붙인 메타 블록을 걷어낸다(본문 줄은 순서 그대로 보존)."""
+    kept: list[str] = []
+    depth = 0            # 여는 괄호가 아직 안 닫힌 메타 블록 안인가
+    in_list = False      # 대괄호 머리말 아래 목록을 먹는 중인가
+    for line in lines:
+        if depth > 0:                       # 여러 줄에 걸친 (…) 메타 주석
+            depth += line.count("(") + line.count("（") - line.count(")") - line.count("）")
+            continue
+        if in_list:
+            if not line or _BULLET_RE.match(line) or _is_meta_start(line):
+                in_list = bool(line)        # 빈 줄이면 블록 종료
+                continue
+            in_list = False                 # 목록이 아닌 본문이 다시 시작됐다
+        if _is_meta_start(line):
+            depth = line.count("(") + line.count("（") - line.count(")") - line.count("）")
+            in_list = depth <= 0
+            depth = max(depth, 0)
+            continue
+        kept.append(_META_TAIL_RE.sub("", line).strip())
+    return [line for line in kept if line]
+
 
 def clean_line(text: str) -> str:
     """LLM 대사에서 화면에 글자로 보일 마크업·인용부호를 걷어낸다.
@@ -35,12 +93,18 @@ def clean_line(text: str) -> str:
     모델이 대사를 따옴표로 감싸 여러 문단으로 뱉는 일이 잦다(실측: 제주). 줄 **양끝의**
     큰따옴표만 떼고 빈 줄은 버린다 — 문장 가운데 따옴표('미래상상연구실' 같은 고유명)는
     그대로 둬야 하므로 통째로 지우지 않는다.
+
+    [v2] 대사 뒤에 붙는 '작업 설명'([규칙 준수] 목록 · (※ …) 주석 · 줄 끝 메타 괄호)도
+    걷어낸다 — 앱이 이 값을 그대로 화면에 그린다(결함보고 20260904 #1).
     """
     text = _BR_RE.sub("\n", text or "")
     text = _TAG_RE.sub("", text)
     text = _EMPHASIS_RE.sub(r"\2", text)          # **강조** → 강조
     lines = [ln.strip().strip('"“”').strip() for ln in text.split("\n")]
-    return "\n".join(ln for ln in lines if ln)
+    body = [ln for ln in lines if ln]
+    # [v2] 모델이 덧붙인 작업 설명을 걷어낸다. 전부 메타로 판정되면(=오판 가능성)
+    #      본문을 비우는 대신 걷어내기 전 상태를 돌려준다 — 빈 대사가 더 나쁘다.
+    return "\n".join(_strip_meta_blocks(body) or body)
 
 
 def _ordinal(n: int) -> str:

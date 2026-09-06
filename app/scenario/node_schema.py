@@ -861,8 +861,10 @@ def validate_app_contract(node: dict[str, Any]) -> None:
 def run_qa(node: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
     """정답 유출·말투·grounding 범위를 자동 점검한다. 응답 DTO에는 넣지 않는다.
 
-    v3: 환각 체크는 조사(助詞)를 스트리핑한 어간 비교 — 한국어 곡용 오탐 완화.
-    여전히 휴리스틱이므로 게이트가 아니라 **경고 로그**용이다(generator에서 배선).
+    v4: 환각 체크는 **검증 가능한 주장**(연도·수치·한자·라틴 표기·고유명사 후보)만 본다.
+    문체·서술어는 애초에 후보로 뽑지 않는다 — v3까지의 "모든 어휘가 원문에 있어야 한다"는
+    전제가 오탐 100%의 원인이었다(_verifiable_claims 주석 참조).
+    hallucination_flag는 게이트가 아니라 **경고**다 — qa_graph는 이걸로 재생성하지 않는다.
     """
     quiz = node.get("quiz") if isinstance(node.get("quiz"), dict) else {}
     answer = _quiz_answer_text(quiz)
@@ -874,21 +876,17 @@ def run_qa(node: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
     answer_leak = bool(answer and answer in hint_text)
     tone_ok = not dialogue or any(marker in dialogue for marker in _TONE_MARKERS)
 
-    claim_stems = {_stem(t) for t in _meaningful_tokens(dialogue)}
-    ground_stems = {
-        _stem(t) for t in _meaningful_tokens(f"{source.get('name', '')} {source.get('title', '')} {overview}")
-    }
-    unsupported = sorted(
-        stem
-        for stem in claim_stems
-        if len(stem) >= 3 and not _stem_supported(stem, ground_stems)
-    )[:10]
+    ground = _normalize_claim(f"{source.get('name', '')} {source.get('title', '')} {overview}")
+    unsupported = [
+        claim for claim in _verifiable_claims(dialogue)
+        if not _claim_supported(claim, ground)
+    ][:10]
 
     return {
         "answer_leak": answer_leak,
         "tone_ok": tone_ok,
-        # 어간 3개 이상이 근거 밖일 때만 플래그 — 문체 어휘로 인한 소음 하한.
-        "hallucination_flag": bool(overview) and len(unsupported) >= 3,
+        # 근거 밖 '주장'이 2개 이상일 때만 경고 — 표기 흔들림 1건으로 뜨지 않게 한 하한.
+        "hallucination_flag": bool(overview) and len(unsupported) >= _HALLUCINATION_MIN_CLAIMS,
         "unsupported_tokens": unsupported,
         "contract_ok": _contract_ok(node),
     }
@@ -1106,13 +1104,33 @@ def _unique(values: Iterable[str]) -> list[str]:
     return result
 
 
-# ── QA 토큰 처리(⑥) — 한국어 조사 스트리핑 어간 비교 ─────────────────────
+# ── QA 환각 판정(⑥ v4) — '검증 가능한 주장'만 원문과 대조한다 ──────────────
+#
+# v3까지의 전제는 "대사의 모든 어휘가 TourAPI 원문에 글자 그대로 등장해야 한다"였다.
+# 한국어 서술어는 원문(설명문)에 있을 수가 없어 3~4문장짜리 정상 대사는 예외 없이
+# 걸렸다 — 실측(2026-09-04, solar-pro) 정밀도 0/35:
+#     용언 활용형 11(세워진·복원했으며·느껴보겠느냐) · 문체 부사/형용사 19(가벼운·
+#     끝내주니·터이니) · 프롬프트 역류 4 · 표기 차이 1(삼일운동↔3·1운동) · 진짜 오류 0.
+#
+# v4는 방향을 뒤집는다: **틀렸다고 말할 수 있는 것만** 후보로 뽑는다.
+#     ① 연도·수치(단위가 붙었거나 3자리 이상)  ② 한자  ③ 라틴 표기
+#     ④ 고유명사 후보 — 장소·사건 접미(궁·전·터·운동…)로 끝나는 3글자 이상 한글 토큰
+# 서술어와 문체어는 ④의 접미 목록에 걸리지 않으므로 후보 단계에서 사라진다.
+# 잡지 못하는 고유명사(예: 인명 '민영환')가 생기지만, 이 판정은 게이트가 아니라 경고이므로
+# **재현율보다 정밀도**를 택한다(qa_graph v2).
 
-# 세계관·퀘스트 상용어는 장소 grounding 대상이 아니다(고정 템플릿 대사 오탐 방지).
+# 근거 밖 '주장' 몇 개부터 경고할지. 표기 흔들림 1건으로 뜨지 않도록 2로 둔다.
+_HALLUCINATION_MIN_CLAIMS = 2
+
+# 세계관·퀘스트 상용어 + 재작성 지시문 어휘는 장소 grounding 대상이 아니다.
+# ⚠️ 이 목록은 **조사를 뗀 어간**과 대조한다(_verifiable_claims). v3에서는 조사 제거
+#    *전에만* 걸러서 "도깨비로"가 통과한 뒤 어간 "도깨비"로 되살아났다(실측).
 _STOPWORDS = {
     "그리고", "하지만", "이곳", "여기", "도깨비", "기억석", "조각", "허허",
     "기억", "흔적", "임무", "지령", "복원", "흩어진", "마지막", "조각이로",
     "복원하거", "찾아보거", "살펴보거", "모아", "숨었느니", "오호",
+    # 재작성 지시문에서 역류할 수 있는 말 — 장소 사실이 아니다.
+    "감탄사", "어말어미", "문장", "근거해", "규칙", "지시",
 }
 _PARTICLES = (
     "에서는", "에게서", "으로써", "이라는", "라는", "이나", "이며", "이다",
@@ -1120,13 +1138,41 @@ _PARTICLES = (
     "을", "를", "의", "에", "와", "과", "도", "만", "로", "라", "다", "요",
 )
 
+# ④ 고유명사 후보 판별용 접미. 관광·문화재 원문에서 개체를 만드는 꼬리만 모았다.
+# 서술어 어미(-진/-며/-고/-니/-냐/-운/-야)와 겹치지 않는 것만 넣는다.
+_PROPER_SUFFIXES = (
+    "궁", "전", "각", "문", "루", "정", "탑", "암", "당", "청", "성", "관",
+    "릉", "묘", "총", "터", "촌", "굴", "봉", "천", "강", "산", "교", "길",
+    "원", "사", "대", "제", "왕", "군", "공", "선생", "장군", "대군",
+    "박물관", "미술관", "서원", "향교", "시장", "마을", "폭포", "고개",
+    "운동", "사건", "전쟁", "조약", "시대", "왕조",
+)
 
-def _meaningful_tokens(text: str) -> set[str]:
-    return {
-        token
-        for token in re.findall(r"[가-힣A-Za-z0-9]{2,}", text)
-        if token not in _STOPWORDS
-    }
+# ① 연도·수치. 단위가 붙었거나 3자리 이상인 수만 '주장'으로 본다.
+#    "3문장"·"2개"처럼 단위 없는 한 자리 수는 문체·프롬프트 잔재라 제외한다.
+_CLAIM_NUMBER_RE = re.compile(
+    r"\d[\d,]*(?:\.\d+)?\s*"
+    r"(?:년대|세기|년|월|일|미터|킬로미터|킬로|km|cm|mm|m|명|층|칸|권|척|평|폭|호|기|점)"
+    r"|\d{3,}"
+)
+_CLAIM_HANJA_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+_CLAIM_LATIN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+")
+_HANGUL_TOKEN_RE = re.compile(r"[가-힣]+")
+
+# 표기 차이 흡수(실측: 대사 "삼일운동" ↔ 원문 "3·1운동"). 한자 수사도 같은 규칙으로
+# 접는다 — 양쪽 텍스트에 똑같이 적용하므로 매칭이 헐거워질 뿐 오탐은 늘지 않는다.
+_SINO_DIGITS = str.maketrans({
+    "영": "0", "공": "0", "일": "1", "이": "2", "삼": "3", "사": "4", "오": "5",
+    "육": "6", "칠": "7", "팔": "8", "구": "9",
+    "零": "0", "一": "1", "二": "2", "三": "3", "四": "4", "五": "5",
+    "六": "6", "七": "7", "八": "8", "九": "9",
+})
+_NON_WORD_RE = re.compile(r"[^0-9A-Za-z가-힣\u3400-\u4dbf\u4e00-\u9fff]+")
+
+
+def _normalize_claim(text: str) -> str:
+    """비교용 정규화 — 공백·구두점 제거 + 소문자 + 수사 통일."""
+    return _NON_WORD_RE.sub("", (text or "").lower()).translate(_SINO_DIGITS)
 
 
 def _stem(token: str) -> str:
@@ -1137,15 +1183,43 @@ def _stem(token: str) -> str:
     return token
 
 
-def _stem_supported(stem: str, ground_stems: set[str]) -> bool:
-    """어간이 근거 어간과 접두 일치(≥2글자)하면 지지된 것으로 본다."""
-    if stem in ground_stems:
+def _verifiable_claims(text: str) -> list[str]:
+    """대사에서 '원문과 대조 가능한 주장'만 뽑는다(입력 순서 보존·중복 제거)."""
+    claims: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        value = value.strip()
+        key = _normalize_claim(value)
+        if value and key and key not in seen:
+            seen.add(key)
+            claims.append(value)
+
+    for regex in (_CLAIM_NUMBER_RE, _CLAIM_HANJA_RE, _CLAIM_LATIN_RE):
+        for match in regex.finditer(text or ""):
+            add(match.group(0))
+
+    for token in _HANGUL_TOKEN_RE.findall(text or ""):
+        stem = _stem(token)                     # 조사부터 뗀 뒤에 걸러야 한다(v3 버그)
+        if stem in _STOPWORDS or len(stem) < 3:
+            continue
+        if stem.endswith(_PROPER_SUFFIXES):
+            add(stem)
+    return claims
+
+
+def _claim_supported(claim: str, ground: str) -> bool:
+    """주장이 정규화된 근거 텍스트에 담겨 있는가.
+
+    끝 한 글자는 떼고도 본다 — 원문 "보신각"에 대사 "보신각터"처럼 개체 꼬리가 붙는
+    경우까지 근거 있음으로 인정한다(꼬리 하나 차이로 경고를 띄우지 않는다).
+    """
+    key = _normalize_claim(claim)
+    if not key or not ground:
+        return False
+    if key in ground:
         return True
-    return any(
-        g.startswith(stem) or stem.startswith(g)
-        for g in ground_stems
-        if len(g) >= 2
-    )
+    return len(key) >= 3 and key[:-1] in ground
 
 
 def _contract_ok(node: dict[str, Any]) -> bool:
