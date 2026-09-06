@@ -10,8 +10,12 @@
 ## 0. 왜 이 문서가 필요한가
 
 결함 5건 중 #1·#2는 AI 레포 단독으로 고쳤다(커밋 `671a11b`, `6dc252c`).
-#4는 `.env` 설정 한 줄이라 이번 범위 밖.
+#4는 `.env`/`.env.example`에 `DOKKAEBI_SCENARIO_FOOD_PER_ROUTE=2`를 넣어 **켰다**.
 **#3·#5는 앱이 보내지 않는 필드**라서 AI 쪽에서 손댈 수가 없다.
+
+> 🔴 **#5는 더 이상 잠복이 아니다.** #4를 켰으므로 이제 코스에 식당·카페 노드가
+> 실제로 들어간다. 앱이 `kind`를 안 보내면 **그 노드에서 "기억석 조각을 찾아라"
+> 대사가 그대로 나간다.** #5의 `kind` 배선이 가장 급하다.
 
 > ⚠️ **서버 `ValidationPipe`가 `whitelist: true`다.** 앱이 필드를 실어 보내도
 > 서버 DTO에 그 필드가 없으면 **조용히 잘려 나간다**(에러도 안 난다).
@@ -95,8 +99,10 @@ duration · companion · difficulty · tags · headcount · transport · budget
   정보를 실어 줘야 분기를 인지한다. 지금은 `with_branching`이 꺼져 있어 안 터지지만,
   **켜는 순간 갈림길 대화가 깨진다.**
 - **`kind`** — 식당·카페 노드에서도 "기억석 조각을 찾아라" 대사가 나간다.
-  **결함 #4(식음 노드 0개)를 해결하면 바로 발현된다.**
-  → 그래서 `.env`에 `DOKKAEBI_SCENARIO_FOOD_PER_ROUTE`를 켜기 **전에** 이걸 먼저 고쳐야 한다.
+  **🔴 지금 발현 중이다** — 결함 #4를 켜서 식음 노드가 실제로 생성된다.
+  AI는 `kind`를 받으면 조각 의뢰 대신 요기 권유로 바꾼다
+  (`tests/services/test_branching_service.py::test_food_node_never_asks_for_a_stone`).
+  못 받으면 기본값 `"spot"`이라 조각을 의뢰한다.
 - **`region_id`** — grounding 재조회 시 지역 워킹셋 편입에 쓰인다. 없으면 원문 재조회가 약해진다.
 - **`player_state`** — `{progress, required}` 진행도. 대사 톤 조절에 쓰인다.
 
@@ -169,5 +175,22 @@ POST /v1/dialogue/turn
 - [ ] 서버: 응답의 `duration`·`companion`·`difficulty`·`tags`·`headcount` 반환 확인
 - [ ] 앱: `dialogueTurn`에 `branch`·`kind`·`region_id`·`player_state` 추가
 - [ ] 서버: `/v1/search`의 `{"candidates": [...]}` 언랩 여부 확인
-- [ ] **순서 주의**: `.env`의 식음 노드(`DOKKAEBI_SCENARIO_FOOD_PER_ROUTE`)를 켜기 전에
-      `kind` 전송을 먼저 배선해야 식음 노드에서 엉뚱한 대사가 안 나온다
+- [ ] 🔴 **우선순위**: `kind` 전송이 가장 급하다 — `DOKKAEBI_SCENARIO_FOOD_PER_ROUTE=2`가
+      이미 켜져 식음 노드가 생성되고 있어, 지금 그 노드에서 조각 의뢰 대사가 나간다
+
+---
+
+## 5. AI 쪽 회귀 테스트
+
+이 문서가 주장하는 "AI는 이미 받고 있다"가 무너지지 않게 잠가 뒀다 —
+`tests/test_llm_integration_defects.py` (결함 번호별 구성).
+
+| 테스트 | 잠그는 것 |
+|---|---|
+| `test_결함3_마법사_입력_전부가_생성기까지_도달한다` | 5개 필드 + `headcount`가 요청 → 생성기까지 |
+| `test_결함3_응답이_요청값을_에코해_잘림을_드러낸다` | 응답 에코(서버 whitelist 잘림 확인 창구) |
+| `test_결함3_필드를_안_보내던_옛_앱도_그대로_동작한다` | 하위호환 — 앱 미수정 상태에서 200 |
+| `test_결함5_branch와_kind가_대화_서비스까지_도달한다` | 4개 필드가 `run_branching`까지 |
+| `test_결함5_안_보내던_옛_앱은_기본값으로_동작한다` | 지금 상태(`kind="spot"`·`branch=None`) 기록 |
+
+앱·서버 수정 후 위 테스트가 그대로 통과해야 한다(AI 쪽 계약은 바뀌지 않는다).
