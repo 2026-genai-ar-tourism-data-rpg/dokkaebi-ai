@@ -19,7 +19,7 @@
 # ------------------------------------------------------------
 # [v5] 시나리오 응답에 prologue 추가 — 코스 오프닝 대본(화자 순서·연출 비트는 고정,
 #      대사만 region·첫 장소로 생성). default_factory=list라 기존 호출자 무영향.
-# 구현일: 2026-09-04 | 작성: Claude (prologue-story-gen/claude/v1)
+# 구현일: 2026-09-04 | 작성: ljs (prologue-story-gen/ljs/v1)
 # ============================================================
 from pydantic import BaseModel, Field
 
