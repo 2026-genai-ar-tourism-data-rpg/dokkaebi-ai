@@ -12,6 +12,7 @@
 # ============================================================
 import pytest
 
+from app.config import get_settings
 from app.tourapi.food import (
     band_match_score, budget_to_band, gap_segments, interleave_food,
     pick_candidate, plan_slots,
@@ -146,9 +147,23 @@ def test_budget_too_small_falls_back_to_zero():
     out = interleave_food(ROUTE, budget=2000, headcount=4, per_route=2, candidates=CANDS)
     assert out == ROUTE                                      # 삽입 0, 경로 그대로(실패 아님)
 
-def test_switch_off_preserves_behavior():
-    """settings 기본(per_route=0) → 완전 no-op = 기존 동작 100% 보존 (seam 계약)."""
-    assert interleave_food(ROUTE, budget=20000) == ROUTE
+def test_switch_off_preserves_behavior(monkeypatch):
+    """per_route=0 → 완전 no-op = 기존 동작 100% 보존 (seam 계약).
+
+    ⚠️ per_route를 생략하면 settings(=.env)를 읽는다. 결함보고 20260904 #4 조치로
+    DOKKAEBI_SCENARIO_FOOD_PER_ROUTE가 실제 .env에 켜졌으므로, 이 테스트는 주변
+    환경이 아니라 **값 자체**를 고정해서 본다(안 그러면 실 TourAPI를 부른다).
+    """
+    assert interleave_food(ROUTE, budget=20000, per_route=0) == ROUTE
+    monkeypatch.setattr(get_settings(), "scenario_food_per_route", 0)
+    assert interleave_food(ROUTE, budget=20000) == ROUTE      # settings 경유도 no-op
+
+
+def test_switch_on_reads_settings(monkeypatch):
+    """per_route 생략 시 settings 값이 실제로 스위치 역할을 한다(#4 조치의 배선)."""
+    monkeypatch.setattr(get_settings(), "scenario_food_per_route", 2)
+    out = interleave_food(ROUTE, budget=20000, headcount=1, candidates=CANDS)
+    assert [n for n in out if n.get("kind") in ("food", "cafe")]
 
 def test_no_invented_krw_estimates():
     """원 단위 추정(spend_est) 재유입 금지 — 밴드 방식 회귀 방지."""
