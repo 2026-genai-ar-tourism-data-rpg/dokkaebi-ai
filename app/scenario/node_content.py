@@ -12,9 +12,32 @@
 #            assign_mission_type은 하위호환 보존 — 신규 경로는 node_schema.select_mission_type
 #            (동기→허용 전략→미션 타입, 미션 텍스트↔액션 모순 차단).
 # 구현일: 2026-07-30 | 작성: pjh (node-schema-gen/pjh/v1)
+# ------------------------------------------------------------
+# [v3] 미션 생성 실패를 조용히 삼키지 않는다 — 실패는 예외로 올린다.
+# 구현(요약): generate_mission이 LLM 오류·JSON 파싱 실패를 잡아 제네릭 미션으로
+#            바꿔 돌려주는 바람에 호출측이 "생성됐지만 내용이 텅 빈" 미션을 그대로
+#            내보냈다 → MissionGenerationError를 raise하고, 제네릭 폴백은
+#            generic_mission()으로 분리(폴백 자체는 그대로 유지). 재시도·폴백 결정은
+#            generator._content_for가 한다. feedback= 인자로 QA 재생성 지시를 싣는다.
+# 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v4] 프롬프트가 안 만드는 필드를 전략이 요구하던 구멍을 막는다(실측 2026-09-09).
+# 구현(요약): select_mission_type이 "미션 텍스트↔액션 정합"을 보장한다고 해 놓고,
+#            매핑된 전략(_compile_strategy)이 쓰는 필드를 그 타입 프롬프트가 안 만들었다.
+#            · PATH_TRACE→S4는 photo_targets가 없어 촬영 대상이 늘 ["대문","마당",
+#              "전통건물 외관"] — 탑골공원 팔각정엔 대문도 마당도 없다.
+#            · PHOTO_FIND→S4는 trail_clue/steps가 없어 발자국이 늘 "먹물 발자국" 3걸음.
+#            · HUNT→S2는 find가 없어 파편이 늘 "글씨파편".
+#            → 해당 키를 각 프롬프트에 추가한다.
+#            또 trail_clue(묘사 1문장)가 follow.object로 쓰여 success 문자열에 문장이
+#            통째로 박혔다("follow:검은 먹물이 번진 발자국이 … 이어졌다>=3") →
+#            짧은 이름 trail_object를 따로 받는다(묘사는 대사용으로 그대로 둔다).
+#            힌트 개수도 타입마다 1개/2개로 갈려 사다리 H2가 범용으로 떨어졌다 → 전부 2개.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import json
 
+from app.core.exceptions import MissionGenerationError
 from app.core.logger import get_logger
 from app.llm.client import get_llm
 
@@ -82,61 +105,81 @@ _PROMPTS = {
     "PHOTO_FIND": _BASE + (
         "미션: 사진 촬영 → 먹물 발자국 추적 → 파편 수집.\n"
         '아래 JSON만: {{"photo_targets":["<촬영할 건축/풍경 요소>","<..>"],'
+        '"trail_object":"<따라갈 자취의 짧은 이름, 4~10자>","trail_clue":"<자취 묘사 1문장>",'
+        '"steps":["<거쳐갈 지점1>","<지점2>","<지점3>"],'
         '"find":"<찾을 파편 이름>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "COLLECT": _BASE + (
         "미션: AR로 이 장소 테마에 맞는 재료/오브젝트를 모으기.\n"
         '아래 JSON만: {{"items":["<재료1>","<재료2>","<재료3>","<재료4>"],'
-        '"reactions":["<탭할 때 도깨비 반응1>","<반응2>"],"order":"<지령 1줄>","hints":["<힌트1>","<힌트2>"]}}'
+        '"reactions":["<탭할 때 도깨비 반응1>","<반응2>"],"order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "DIALOGUE_FIND": _BASE + (
         "미션: 도깨비 질문에 선택지로 답 → 정답이면 AR 오브젝트 활성화.\n"
         '아래 JSON만: {{"question":"<장소 관련 질문>","options":["<선택1>","<선택2>","<선택3>","<선택4>"],'
-        '"answer":<정답 0-3 정수>,"find":"<찾을 오브젝트>","order":"<지령 1줄>","hints":["<힌트1>"]}}'
+        '"answer":<정답 0-3 정수>,"find":"<찾을 오브젝트>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "FIND": _BASE + (
         "미션: AR 카메라로 떠다니는 오브젝트를 찾아 수집(특수 조건 포함).\n"
         '아래 JSON만: {{"object":"<떠다니는 오브젝트>","count":<3-5 정수>,'
-        '"special":"<특수 조건 1문장, 예: 천천히 돌려야 사라지지 않음>","order":"<지령 1줄>","hints":["<힌트1>","<힌트2>"]}}'
+        '"special":"<특수 조건 1문장, 예: 천천히 돌려야 사라지지 않음>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "QUIZ_FIND": _BASE + (
         "미션: 4지선다 퀴즈 정답 → 잠긴 곳 개봉 → 파편. 정답은 [장소 정보]에서 검증 가능해야 한다.\n"
         '아래 JSON만: {{"q":"<문제>","options":["<1>","<2>","<3>","<4>"],"answer":<0-3 정수>,'
-        '"wrong_hint":"<오답 힌트, 정답 직접노출 금지>","find":"<찾을 파편>","order":"<지령 1줄>","hints":["<힌트1>"]}}'
+        '"wrong_hint":"<오답 힌트, 정답 직접노출 금지>","find":"<찾을 파편>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "HUNT": _BASE + (
         "미션: AR 카메라로 이 장소에 깃든 '망각귀'(잊혀진 기억이 뒤틀린 괴물)를 사냥. 마지막에 미니보스.\n"
         '아래 JSON만: {{"monster":"<이 장소 테마의 망각귀 이름>","count":<3-7 정수>,'
-        '"boss":"<마지막 미니보스 이름>","weakness":"<약점/공략 1문장>","order":"<지령 1줄>","hints":["<힌트1>","<힌트2>"]}}'
+        '"boss":"<마지막 미니보스 이름>","weakness":"<약점/공략 1문장>","find":"<쓰러뜨린 뒤 주울 파편 이름>",'
+        '"order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "RESTORE_AR": _BASE + (
         "미션: 사라지거나 무너진 옛 건물/구조물을 AR로 복원. 흩어진 부재(주춧돌·기둥 등)를 제자리에 맞춘다.\n"
         '아래 JSON만: {{"structure":"<복원할 옛 건물/구조물>","parts":["<흩어진 부재1>","<부재2>","<부재3>"],'
-        '"era":"<시대>","order":"<지령 1줄>","hints":["<힌트1>","<힌트2>"]}}'
+        '"era":"<시대>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "PATH_TRACE": _BASE + (
         "미션: 먹물 발자국을 따라 주변 지점들을 순서대로 밟아 파편에 도달.\n"
-        '아래 JSON만: {{"trail_clue":"<발자국 묘사 1문장>","steps":["<거쳐갈 지점/단서1>","<지점2>","<지점3>"],'
-        '"find":"<도착지에서 찾을 것>","order":"<지령 1줄>","hints":["<힌트1>"]}}'
+        '아래 JSON만: {{"trail_object":"<따라갈 자취의 짧은 이름, 4~10자>",'
+        '"trail_clue":"<발자국 묘사 1문장>","steps":["<거쳐갈 지점/단서1>","<지점2>","<지점3>"],'
+        '"photo_targets":["<도중에 찍을 이 장소의 요소>","<..>"],'
+        '"find":"<도착지에서 찾을 것>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
     "DIALOGUE_COLLECT": _BASE + (
         "미션: 최종장. 망각귀의 비관 대사 + 수호 도깨비의 답 + 모은 조각을 순서대로 맞춰 복원하라는 지령.\n"
         '아래 JSON만: {{"villain_line":"<망각귀 비관 대사>","guardian_line":"<수호 도깨비의 답>",'
-        '"order":"<복원 지령 1줄>","hints":["<힌트1>"]}}'
+        '"order":"<복원 지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
     ),
 }
 
 
-async def generate_mission(name: str, overview: str, mtype: str) -> dict:
-    """타입별 미션 콘텐츠 생성. 실패해도 폴백(항상 order+hints 보장)."""
+async def generate_mission(name: str, overview: str, mtype: str, *, feedback: str = "") -> dict:
+    """타입별 미션 콘텐츠 생성. 실패는 **MissionGenerationError로 올린다**.
+
+    feedback: 직전 출력이 QA를 통과하지 못한 이유(재생성 지시). 비어 있으면 최초 생성.
+    ⚠️ 예전에는 실패를 안에서 삼켜 제네릭 미션을 돌려줬다 — 호출측이 실패를 알 수 없어
+       재시도도, 사용자 고지도 불가능했다. 폴백은 generic_mission()으로 분리했다.
+    """
     prompt = _PROMPTS.get(mtype, _PROMPTS["FIND"]).format(name=name, overview=(overview or "")[:1500])
+    if feedback:
+        prompt += f"\n[재작성 지시] {feedback}\n같은 실수를 반복하지 말고 JSON만 다시 출력하라."
     try:
         raw = await _llm.generate(prompt)
-        data = _json(raw) or {}
     except Exception as e:
-        logger.warning("미션 생성 실패(%s) %s: %s", mtype, name, e)
-        data = {}
+        logger.warning("미션 생성 LLM 호출 실패(%s) %s: %s", mtype, name, e)
+        raise MissionGenerationError(f"LLM 호출 실패: {e}") from e
+    data = _json(raw)
+    if data is None:
+        logger.warning("미션 생성 JSON 파싱 실패(%s) %s", mtype, name)
+        raise MissionGenerationError("LLM 출력 JSON 파싱 실패")
     return _normalize(mtype, data, name)
+
+
+def generic_mission(name: str, mtype: str) -> dict:
+    """생성 실패 시 제네릭 폴백 미션 — 기존 폴백 동작 그대로(항상 order+hints 보장)."""
+    return _normalize(mtype, {}, name)
 
 
 def _json(raw: str) -> dict | None:
@@ -160,6 +203,9 @@ def _normalize(mtype: str, d: dict, name: str) -> dict:
     }
     if mtype == "PHOTO_FIND":
         m["photo_targets"] = _strs(d.get("photo_targets"), ["대문", "전통 건물 외관"])
+        m["trail_object"] = str(d.get("trail_object") or "먹물 발자국")
+        m["trail_clue"] = str(d.get("trail_clue") or "먹빛 발자국이 희미하게 이어지느니라.")
+        m["steps"] = _strs(d.get("steps"), ["첫 번째 갈림길", "오래된 나무 곁", "담장 끝"])
         m["find"] = str(d.get("find") or "기억석 파편")
     elif mtype == "COLLECT":
         m["items"] = _strs(d.get("items"), ["흩어진 조각", "옛 흔적", "빛 가루", "낡은 문양"])
@@ -184,13 +230,16 @@ def _normalize(mtype: str, d: dict, name: str) -> dict:
         m["count"] = d.get("count") if isinstance(d.get("count"), int) and 1 <= d["count"] <= 9 else 5
         m["boss"] = str(d.get("boss") or "흑묵 망령")
         m["weakness"] = str(d.get("weakness") or "도깨비불을 비추면 약해지느니라.")
+        m["find"] = str(d.get("find") or "기억석 파편")
     elif mtype == "RESTORE_AR":
         m["structure"] = str(d.get("structure") or "옛 전각")
         m["parts"] = _strs(d.get("parts"), ["주춧돌", "기둥", "지붕 부재"])
         m["era"] = str(d.get("era") or "옛 시절")
     elif mtype == "PATH_TRACE":
+        m["trail_object"] = str(d.get("trail_object") or "먹물 발자국")
         m["trail_clue"] = str(d.get("trail_clue") or "먹빛 발자국이 희미하게 이어지느니라.")
         m["steps"] = _strs(d.get("steps"), ["첫 번째 갈림길", "오래된 나무 곁", "담장 끝"])
+        m["photo_targets"] = _strs(d.get("photo_targets"), [f"{name}의 전경"])
         m["find"] = str(d.get("find") or "기억석 파편")
     elif mtype == "DIALOGUE_COLLECT":
         m["villain_line"] = str(d.get("villain_line") or "작은 것들은 곧 잊히는 법이지.")

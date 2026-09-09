@@ -5,6 +5,11 @@
 #            ② 대사 마크업 제거가 원문 인용(「<양반전>」)을 해치지 않는지
 #            실측(2026-08-19, 6개 지역 순회)에서 나온 회귀를 잠근다. LLM·네트워크 0.
 # 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
+# ------------------------------------------------------------
+# [v2] 메타 블록 제거 회귀 — 결함보고 20260904 #1.
+# 커버: ③ 실 LLM(solar-pro)이 대사 뒤에 붙인 [규칙 준수] 목록·(※ …) 주석·줄 끝 메타
+#         괄호를 걷어내되, 본문 괄호와 작품명은 그대로 두는지. 실측 4건을 그대로 박는다.
+# 구현일: 2026-09-06 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 from app.core.wording import (
     clean_line,
@@ -20,12 +25,12 @@ from app.core.wording import (
 def test_stone_names_survive_any_region_label():
     """fragment_id에는 자동 판정된 지역 라벨이 박힌다 — 6개 지역 실측값 그대로."""
     cases = {
-        "fragment:해운대구_stone_1of4": "기억석 첫째 조각",
-        "fragment:경주시_stone_2of4": "기억석 둘째 조각",
-        "fragment:완산구_stone_3of4": "기억석 셋째 조각",
-        "fragment:서귀포시_stone_4of4": "기억석 넷째 조각",
-        "fragment:정선군_stone_3of3": "기억석 셋째 조각",
-        "fragment:이 지역_stone_1of5": "기억석 첫째 조각",   # 주소 판정 실패 시 폴백 라벨
+        "fragment:해운대구_stone_1of4": "기억석 첫 번째 조각",
+        "fragment:경주시_stone_2of4": "기억석 두 번째 조각",
+        "fragment:완산구_stone_3of4": "기억석 세 번째 조각",
+        "fragment:서귀포시_stone_4of4": "기억석 네 번째 조각",
+        "fragment:정선군_stone_3of3": "기억석 세 번째 조각",
+        "fragment:이 지역_stone_1of5": "기억석 첫 번째 조각",   # 주소 판정 실패 시 폴백 라벨
     }
     for ref, expected in cases.items():
         assert humanize_ref(ref) == expected, ref
@@ -48,7 +53,7 @@ def test_inventory_line():
     assert inventory_line(None) == "아직 모은 것이 없다."
     assert inventory_line({"items": []}) == "아직 모은 것이 없다."
     line = inventory_line({"items": ["clue:ㄱ", "fragment:완산구_stone_2of4"]})
-    assert line == "지금까지 모은 것: 단서 「ㄱ」, 기억석 둘째 조각"
+    assert line == "지금까지 모은 것: 단서 「ㄱ」, 기억석 두 번째 조각"
     assert "clue:" not in line and "fragment:" not in line
 
 
@@ -76,6 +81,67 @@ def test_inner_quotes_are_preserved():
     """문장 가운데 인용은 고유명일 수 있다 — 지우면 뜻이 상한다."""
     got = clean_line("창의마루 3층 '미래상상연구실' 벽면이니라")
     assert got == "창의마루 3층 '미래상상연구실' 벽면이니라"
+
+
+# ── 메타 블록 제거 [v2] — 실측 유출 4건 ────────────────────────
+#
+# 2026-09-04 실 LLM 점검에서 노드 4개 중 3개의 npc_dialogue에 프롬프트 지시문이 실려
+# 나갔다. 앱은 이 값을 QuestNode.npcDialogue로 그대로 그린다.
+
+_BODY_민영환 = (
+    "허허, 이 자리가 바로 민영환 선생이 을사늑약의 치욕을 견디지 못해 "
+    "순절로 목숨을 바친 곳이니라. 그 뜻을 헤아리지 않겠느냐?"
+)
+
+
+def test_bracket_rule_block_and_its_bullets_are_dropped():
+    """실측: 대사 뒤에 '[규칙 준수]' 머리말과 작성 지침 목록이 그대로 따라 나왔다."""
+    raw = (
+        f"{_BODY_민영환}\n"
+        "[규칙 준수]\n"
+        "- 실제 소장 정보·유래·조형물(유서·단검) 등 실제 정보만 기술\n"
+        '- "~니라" 어미와 감탄사 "허허" 적용\n'
+        "- 3문장으로 소개 + 가벼운 질문 구성"
+    )
+    assert clean_line(raw) == _BODY_민영환
+
+
+def test_asterisk_annotation_block_is_dropped():
+    """실측: '(※ …)' 주석이 여러 줄에 걸쳐 붙었다."""
+    raw = (
+        "여기가 바로 도성의 시간을 지키던 보신각터니라. 그 이야기를 듣고 싶으냐?\n"
+        "(※ [장소 실제 정보]의 연도·사건·현황을 활용해 재구성.\n"
+        '   "백성들" 등 추정 표현 삭제)'
+    )
+    assert clean_line(raw) == "여기가 바로 도성의 시간을 지키던 보신각터니라. 그 이야기를 듣고 싶으냐?"
+
+
+def test_multiline_parenthetical_worknote_is_dropped():
+    """실측: 괄호로 시작하는 여러 줄 작업 설명."""
+    raw = (
+        "남산 팔각정도 이를 본받았겠다!\n"
+        "(소장 정보에 근거해 역사적 사실과 건축적 특징을 강조하며,\n"
+        " 감탄사와 거친 어말어미 '~느니라/~겠다'를 유지)"
+    )
+    assert clean_line(raw) == "남산 팔각정도 이를 본받았겠다!"
+
+
+def test_trailing_meta_parenthesis_is_dropped():
+    """solar-pro는 단순 인사에도 '(간결하게 … 구성해보았습니다)'를 덧붙인다."""
+    raw = "안녕하신가, 나그네여. 허허. (간결하게 인사말을 구성해보았습니다)"
+    assert clean_line(raw) == "안녕하신가, 나그네여. 허허."
+
+
+def test_body_parentheses_are_not_meta():
+    """본문 괄호·작품명은 메타가 아니다 — 지우면 뜻이 상한다."""
+    raw = "창의마루 3층 '미래상상연구실' 벽면이니라\n(문이 닫혀 있거든 옆으로 돌아가거라)"
+    assert clean_line(raw) == raw
+    assert clean_line("연암의 <양반전>을 아느냐") == "연암의 <양반전>을 아느냐"
+
+
+def test_all_meta_input_keeps_body_rather_than_emptying():
+    """전부 메타로 판정되면 오판일 수 있다 — 빈 대사를 내보내지 않는다."""
+    assert clean_line("[규칙 준수]\n- 3문장으로 구성") == "[규칙 준수]\n- 3문장으로 구성"
 
 
 # ── 이력·진행도 ─────────────────────────────────────────────

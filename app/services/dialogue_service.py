@@ -10,6 +10,9 @@
 #            player_state를 dict째 찍던 시절엔 우연히 보이다가 사람 말 변환(v2) 이후
 #            통째로 사라졌다. 여기서 명시적으로 옮긴다 — 우연이 아니라 계약으로.
 # 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
+# ------------------------------------------------------------
+# [v3] npc(앱 표시 정체성)를 그래프로 넘긴다 — 대사/앱 이름 불일치 차단(persona_inject v3).
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 from app.core.logger import get_logger
 from app.pipeline.graph import build_graph
@@ -36,9 +39,12 @@ def _utterance(player_state: dict | None) -> str:
 
 async def run_dialogue(
     node_id: str, stage: str, player_state: dict, *, node_name: str = "",
-    region_id: str = "",
+    region_id: str = "", qa_feedback: str = "", npc: dict | None = None,
 ) -> tuple[str, bool]:
     """[서비스] 대화 그래프를 invoke해 (대사, 캐시히트여부) 반환.
+
+    qa_feedback: A1 QA 루프가 반려한 이유(있으면 캐시 우회 + 프롬프트에 재작성 지시).
+    npc: 앱에 표시되는 NPC 정체성(synthesize_npc). 주면 대사도 같은 도깨비를 쓴다.
 
     담당: 오케스트레이션 연결 = 김예슬.
     """
@@ -49,6 +55,8 @@ async def run_dialogue(
         "stage": stage,
         "player_state": player_state,
         "query": _utterance(player_state),
+        "qa_feedback": qa_feedback,
+        "npc": npc or {},
     }
     result = await _graph.ainvoke(state)
     return result.get("response", ""), result.get("cache_hit", False)

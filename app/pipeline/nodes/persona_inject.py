@@ -11,6 +11,18 @@
 #            페르소나 7일 동안 옛 출력이 나갔다(실측). config.prompt_version을 키에 넣어
 #            프롬프트 개정과 캐시 무효화를 한 번에 묶는다.
 # 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
+# ------------------------------------------------------------
+# [v3] NPC 정체성의 단일 출처를 만든다 — 이름이 두 계통으로 갈려 있었다.
+# 구현(요약): 대사 프롬프트는 여기서 LLM으로 합성한 이름을, 앱 화면·report 액션은
+#            node_schema.synthesize_npc(sha256 결정적)의 이름을 썼다. 같은 노드에서
+#            도깨비가 "혈죽 도깨비"라 자칭하는데 말풍선엔 "기와 도깨비"가 붙었다
+#            (실측 2026-09-09, 5노드 전부 불일치).
+#            → state["npc"](=synthesize_npc 결과)가 있으면 이름·아키타입·모티프를
+#              그걸로 덮는다. LLM 합성은 '말투·성격' 문장만 담당한다.
+#            ⚠️ synthesize_npc는 "코드 고정 영역"(결정적 정체성)이라 그쪽을 LLM으로
+#              바꾸지 않는다 — 장소와 모티프가 어긋나는 문제(QA 리포트 발견 4)는
+#              별도 결정 사항이라 여기서 건드리지 않았다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import json
 
@@ -38,10 +50,32 @@ async def persona_inject(state: DialogueState) -> dict:
     stage = state.get("stage", "등장")
     version = get_settings().prompt_version
     persona = await _load_persona(node_id, state.get("node_name", ""))
+    persona = _apply_npc_identity(persona, state.get("npc"))
     # 사용자 발화가 있으면 캐시를 쓰지 않는다(빈 키) — 질문이 달라도 같은 대사가 나가면
     # 되묻는 의미가 없다. 발화 없는 정형 대사(등장·완료 등)만 노드·stage로 캐싱한다.
-    cache_key = "" if state.get("query") else f"npc:{version}:{node_id}:{stage}"
+    # QA 재생성(qa_feedback)도 마찬가지 — 캐시를 타면 방금 반려한 그 대사가 그대로 돌아온다.
+    cache_key = (
+        "" if state.get("query") or state.get("qa_feedback")
+        else f"npc:{version}:{node_id}:{stage}"
+    )
     return {"persona": persona, "cache_key": cache_key}
+
+
+def _apply_npc_identity(persona: dict, npc: dict | None) -> dict:
+    """앱에 표시되는 NPC(synthesize_npc)가 있으면 정체성 필드를 그걸로 덮는다.
+
+    말투·성격(persona)은 LLM 합성본을 그대로 둔다 — 장소에서 뽑은 목소리라 품질이 낫고,
+    이름/아키타입/모티프만 앱과 맞추면 "다른 도깨비가 말하는" 모순이 사라진다.
+    npc가 없으면(/v1/dialogue 단독 호출) 기존 동작 그대로.
+    """
+    if not isinstance(npc, dict) or not npc.get("name"):
+        return persona
+    merged = dict(persona)
+    merged["name"] = str(npc["name"])
+    for key in ("archetype", "motif"):
+        if npc.get(key):
+            merged[key] = str(npc[key])
+    return merged
 
 
 async def _load_persona(node_id: str, node_name: str) -> dict:

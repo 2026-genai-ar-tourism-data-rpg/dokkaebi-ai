@@ -439,8 +439,58 @@ def test_qa_hallucination_tolerates_korean_particles():
     assert qa["hallucination_flag"] is False
 
 
-def test_qa_flags_dense_offgrounding_dialogue():
+def test_qa_flags_offgrounding_claims():
+    """v4: 근거 밖 '주장'(연도·고유명사)이 2개 이상이면 경고."""
     node = enrich_quest(_fixture(), _source())
-    node["npc_dialogue"] = "우주선과 공룡화석과 피라미드보물이 잠들어 있느니라."
+    node["npc_dialogue"] = "이 운현궁에는 1919년 세워진 첨성대와 석굴암이 있느니라, 허허."
     qa = run_qa(node, _source())
     assert qa["hallucination_flag"] is True
+    assert set(qa["unsupported_tokens"]) == {"1919년", "첨성대", "석굴암"}
+
+
+# ── ⑥-1 환각 판정 v4 골든 픽스처 — 2026-09-04 실 LLM(solar-pro) 점검 대사 ──────
+#
+# v3 판정은 아래 4건을 전부 환각으로 반려했다(정밀도 0/35). 회귀를 막으려고 실측 대사를
+# 그대로 박아 둔다. 대사는 결함보고 20260904 §실측 · §정상 확인된 것에서 옮겼다.
+
+_GOLDEN_DIALOGUES = [
+    # (근거 원문, 실제로 나온 대사)
+    (
+        "보신각은 조선시대 한양 도성의 종을 달아 두었던 종각이다. "
+        "새벽과 저녁에 종을 쳐 도성 문을 여닫는 시각을 알렸다.",
+        "여기가 바로 도성의 시간을 지키던 보신각터니라. 종소리 울리며 새벽을 알렸다는구먼. 허허.",
+    ),
+    (
+        "민영환 자결터는 을사늑약에 반대하여 자결한 충정공 민영환을 기리는 곳이다.",
+        "허허, 이 자리가 바로 민영환 선생이 을사늑약의 치욕을 견디지 못해 "
+        "순절로 목숨을 바친 곳이니라. 그 뜻을 헤아리지 않겠느냐?",
+    ),
+    (
+        "탑골공원은 1897년 조성된 서울 최초의 근대식 공원으로, 3·1운동이 시작된 곳이다. "
+        "팔각정이 남아 있다.",
+        # 표기 차이(대사 '삼일운동' ↔ 원문 '3·1운동')로 걸리면 안 된다.
+        "이곳 탑골공원 팔각정은 삼일운동의 함성이 터져 나온 자리니라. 그 이야기를 듣고 싶으냐?",
+    ),
+    (
+        "운현궁은 조선 후기의 역사적 장소이며 한옥 건축을 볼 수 있다. 흥선대원군이 머물던 곳이다.",
+        "허허, 운현궁에서 한옥 건축의 흔적을 느껴보겠느냐? "
+        "흥선대원군이 머물며 세워진 담장이 예까지 스며들었고, 가벼운 발걸음으로 살펴보거라.",
+    ),
+]
+
+
+@pytest.mark.parametrize("overview,dialogue", _GOLDEN_DIALOGUES)
+def test_qa_golden_real_dialogues_are_not_hallucinations(overview, dialogue):
+    node = enrich_quest(_fixture(), _source(overview=overview))
+    node["npc_dialogue"] = dialogue
+    qa = run_qa(node, _source(overview=overview))
+    assert qa["hallucination_flag"] is False, qa["unsupported_tokens"]
+    assert qa["tone_ok"] is True
+
+
+def test_qa_stopword_survives_particle_stripping():
+    """v3 버그: 스톱워드를 조사 제거 '전에만' 걸러 '도깨비로'가 어간 '도깨비'로 되살아났다."""
+    node = enrich_quest(_fixture(), _source())
+    node["npc_dialogue"] = "도깨비로 살아온 세월이 길구나, 허허."
+    qa = run_qa(node, _source())
+    assert "도깨비" not in qa["unsupported_tokens"]

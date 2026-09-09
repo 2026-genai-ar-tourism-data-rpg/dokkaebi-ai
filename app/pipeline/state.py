@@ -16,6 +16,9 @@ class DialogueState(TypedDict, total=False):
     stage: str            # 등장 | 의뢰 | 힌트 | 완료
     player_state: dict    # 진행도, 보유 기억석 조각, 이전 대화 요약(멀티턴)
     persona: dict         # 아키타입·모티프·말투 (이지선 시드)
+    npc: dict             # 앱에 표시되는 NPC 정체성(node_schema.synthesize_npc). 있으면
+                          # 이름·아키타입·모티프를 이걸로 덮어쓴다 — 대사와 앱 표시가
+                          # 다른 도깨비를 가리키던 문제(실측 2026-09-09) 차단.
     context: str          # 기본 grounding: 지역 RAM에서 직접 주입한 그 장소 텍스트
     use_rag: bool         # 옵션 RAG 분기 플래그 (대형 텍스트/교차검색)
     query: str            # (옵션 RAG 시) 의미검색 쿼리(사용자 발화/관심사). 없으면 context 폴백
@@ -25,3 +28,4 @@ class DialogueState(TypedDict, total=False):
     response: str         # NPC 대사 / 힌트 (최종 출력)
     cache_key: str        # 대사 캐시 키
     cache_hit: bool       # 캐시 히트 여부 (히트 시 LLM 스킵)
+    qa_feedback: str      # (A1 QA 재생성) 직전 대사가 QA를 통과 못한 이유 — 있으면 캐시 우회

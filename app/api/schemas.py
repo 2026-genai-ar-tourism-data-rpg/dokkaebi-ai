@@ -12,6 +12,10 @@
 #      응답 에코(저장·검증용). 서버 DTO(GenerateScenarioDto)와 1:1로 유지할 것 —
 #      서버 ValidationPipe가 whitelist:true라 여기 있어도 서버에 없으면 조용히 잘린다.
 # 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
+# ------------------------------------------------------------
+# [v4] 시나리오 응답에 qa_flags 추가 — 생성 QA 루프(A1)가 못 고친 결함과 미션 제네릭
+#      폴백을 사람이 읽는 문장으로 내보낸다. default_factory=list라 기존 호출자 무영향.
+# 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 from pydantic import BaseModel, Field
 
@@ -138,6 +142,9 @@ class ScenarioGenResponse(BaseModel):
     wishlist_content_ids: list[str] = Field(default_factory=list)  # 위시 앵커 content_id(앱 표시용)
     is_branching: bool = False          # 갈림길 포함 여부(선형이면 False)
     route_tree: dict | None = None      # 분기 그래프(node_id→{next, choices}). 선형이면 None
+    # 생성 품질 경고(A1 QA 루프가 못 고친 결함·미션 제네릭 폴백). 정상 생성이면 [].
+    # 하위호환: 기존 호출자는 이 키를 몰라도 되고, 없으면 빈 배열로 나간다.
+    qa_flags: list[str] = Field(default_factory=list)
 
 
 # --- 관광지 검색 (앵커 자동완성) ---
