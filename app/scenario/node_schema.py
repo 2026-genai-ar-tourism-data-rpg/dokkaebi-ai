@@ -542,16 +542,50 @@ def build_choices(quest: dict[str, Any], *, is_food: bool) -> list[dict[str, Any
     ]
 
 
+# 식음 노드는 기억석이 없다(fragment_id 없음) — 조각 탐색 문구를 주면 플레이어가
+# 식당에서 없는 것을 뒤진다. build_base_grants·build_success엔 식음 분기가 있는데
+# 사다리만 빠져 있어서, 미션이 None인 장어집에도 "흔적부터 살펴보거라"가 나갔다
+# (실측 2026-09-09).
+_FOOD_LADDER = {
+    "H1": "가게 앞 간판과 차림표를 먼저 살펴보거라.",
+    "H2": "자리를 잡고 한 술 뜬 뒤, 영수증을 챙기면 되느니라.",
+    "H3": "굳이 들지 않겠거든 가게 바깥 모습만 담아도 되느니라.",
+}
+
+
+def _mission_target(mission: dict[str, Any], quest: dict[str, Any]) -> str:
+    """이 노드에서 실제로 찾는 것. 범용 폴백 힌트를 장소·미션에 붙이는 데 쓴다."""
+    for key in ("find", "object", "structure", "monster"):
+        value = str(mission.get(key) or "").strip()
+        if value:
+            return value
+    items = _string_list(mission.get("items")) or _string_list(mission.get("parts"))
+    return items[0] if items else "기억석 조각"
+
+
 def build_hint_ladder(quest: dict[str, Any]) -> dict[str, Any]:
-    """앱 HintLadder.fromJson에 맞는 평면 구조를 만든다."""
+    """앱 HintLadder.fromJson에 맞는 평면 구조를 만든다.
+
+    ⚠️ 폴백 문구도 **노드에서 유도**한다. 예전 폴백("지령에 나온 대상 가까이를 다시
+    확인해 보거라")은 장소·미션과 무관한 한 문장이라, 미션 타입이 힌트를 1개만
+    만들면(_PROMPTS) H2·H3가 통째로 범용으로 떨어졌다 — 사다리가 구체적→범용으로
+    역행했다(실측 2026-09-09: H3는 5노드 전부 폴백).
+    """
     mission = quest.get("mission") if isinstance(quest.get("mission"), dict) else {}
     objective = quest.get("objective") if isinstance(quest.get("objective"), dict) else {}
     quiz = quest.get("quiz") if isinstance(quest.get("quiz"), dict) else {}
 
+    if _is_food(quest):
+        return {**_FOOD_LADDER, "open_rule": ["fail1|idle60", "idle90", "button"]}
+
+    name = str(quest.get("name") or "이곳")
+    target = _mission_target(mission, quest)
     hints = _string_list(mission.get("hints")) or _string_list(objective.get("hints"))
-    h1 = hints[0] if hints else "주변에서 가장 눈에 띄는 흔적부터 살펴보거라."
-    h2 = hints[1] if len(hints) > 1 else "지령에 나온 대상 가까이를 다시 확인해 보거라."
-    h3 = str(quiz.get("wrong_hint") or "화면의 목표와 주변 표식을 차례로 대조해 보거라.")
+    h1 = hints[0] if hints else f"{name}에서 가장 눈에 띄는 흔적부터 살펴보거라."
+    h2 = hints[1] if len(hints) > 1 else f"지령이 이르는 '{target}' 가까이를 다시 살펴보거라."
+    h3 = str(quiz.get("wrong_hint") or "") or (
+        hints[2] if len(hints) > 2 else f"'{target}'을(를) 찾아 화면에 담으면 조각이 열리느니라."
+    )
 
     answer = _quiz_answer_text(quiz)
     h1 = _remove_answer_leak(h1, answer)
@@ -873,7 +907,10 @@ def run_qa(node: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
     dialogue = str(node.get("npc_dialogue") or "")
     overview = str(source.get("overview") or "")
 
-    answer_leak = bool(answer and answer in hint_text)
+    # ⚠️ 판정은 _remove_answer_leak과 **같은 기준**이어야 한다. 예전엔 판정은 부분문자열,
+    #    제거는 무조건 치환이라 (a) 조사에 오탐이 나고 (b) 제거가 먼저 돌아 증거를 지운
+    #    탓에 판정이 늘 False가 됐다 — regen_mission 분기가 사실상 죽어 있었다.
+    answer_leak = answer_leaked(hint_text, answer)
     tone_ok = not dialogue or any(marker in dialogue for marker in _TONE_MARKERS)
 
     ground = _normalize_claim(f"{source.get('name', '')} {source.get('title', '')} {overview}")
@@ -918,8 +955,11 @@ def _compile_strategy(strategy: str, quest: dict[str, Any]) -> list[dict[str, An
         return [
             {"a": "capture", "targets": targets},
             {
+                # ⚠️ trail_clue는 '묘사 1문장'이다 — 그걸 object로 쓰면 success 문자열에
+                #    문장이 통째로 박힌다("follow:검은 먹물이 번진 발자국이 … 이어졌다>=3").
+                #    앱이 식별자로 읽는 자리이므로 짧은 이름(trail_object)만 쓴다.
                 "a": "follow",
-                "object": str(mission.get("trail_clue") or "먹물 발자국"),
+                "object": str(mission.get("trail_object") or "먹물 발자국"),
                 "steps": max(1, len(steps) or 3),
             },
             {"a": "tap", "target": fragment_target, "count": [0, 1]},
@@ -1046,11 +1086,48 @@ def _quiz_answer_text(quiz: dict[str, Any]) -> str:
     return options[idx] if 0 <= idx < len(options) else ""
 
 
+# 정답 유출 판정·제거의 단위. 순수 부분문자열 매치는 1~2글자 정답(자모 조합·한자·숫자
+# 퀴즈는 설계상 1글자다)에서 조사·부사에 그대로 걸린다 — "가장"의 '가', "소리가"의 '가'.
+# 그 상태로 치환까지 하는 바람에 힌트가 "골목 어귀에서 정답과 연결되는 대상장 오래된…"
+# 으로 깨져 나갔다(실측 2026-09-09). 짧은 정답은 **어절 경계**로만 본다.
+_ANSWER_TOKEN_MIN_LEN = 3          # 이 길이부터는 부분문자열 매치가 안전하다
+_WORD_SPLIT_RE = re.compile(r"[^0-9A-Za-z가-힣\u4e00-\u9fff]+")
+_WORD_SPLIT_CAPTURE_RE = re.compile(r"([^0-9A-Za-z가-힣\u4e00-\u9fff]+)")
+_ANSWER_PLACEHOLDER = "정답과 연결되는 대상"
+
+
+def _answer_words(text: str) -> list[str]:
+    """텍스트를 어절로 쪼갠다(구두점·공백 기준). 빈 조각은 버린다."""
+    return [word for word in _WORD_SPLIT_RE.split(text or "") if word]
+
+
+def answer_leaked(text: str, answer: str) -> bool:
+    """힌트 텍스트에 퀴즈 정답이 '노출'됐는가 — 유출 판정과 제거가 같이 쓰는 단일 기준.
+
+    3글자 이상이면 부분문자열로 본다(고유명사가 문장에 녹아 있어도 유출이다).
+    1~2글자면 어절이 통째로 정답이거나, 조사만 뗀 어간이 정답일 때만 유출로 본다.
+    """
+    if not answer or not text:
+        return False
+    if len(answer) >= _ANSWER_TOKEN_MIN_LEN:
+        return answer in text
+    return any(word == answer or _stem(word) == answer for word in _answer_words(text))
+
+
 def _remove_answer_leak(text: str, answer: str) -> str:
-    if not answer or answer not in text:
+    """유출된 정답만 가린다. 유출이 아니면 **원문을 그대로 둔다**(문장을 깨지 않는다)."""
+    if not answer_leaked(text, answer):
         return text
-    cleaned = text.replace(answer, "정답과 연결되는 대상")
-    return cleaned or "주변의 근거를 다시 확인해 보거라."
+    if len(answer) >= _ANSWER_TOKEN_MIN_LEN:
+        cleaned = text.replace(answer, _ANSWER_PLACEHOLDER)
+    else:
+        # 짧은 정답은 어절 단위로만 바꾼다 — 단어 가운데를 건드리면 문장이 깨진다.
+        # split의 캡처 그룹이 구분자(공백·구두점)도 돌려주므로 그대로 이어 붙이면 원문이 복원된다.
+        cleaned = "".join(
+            _ANSWER_PLACEHOLDER if (part == answer or _stem(part) == answer) else part
+            for part in _WORD_SPLIT_CAPTURE_RE.split(text)
+        )
+    return cleaned.strip() or "주변의 근거를 다시 확인해 보거라."
 
 
 def _valid_state_ref(value: str) -> bool:

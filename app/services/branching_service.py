@@ -22,12 +22,26 @@
 #            상태 전이: 잡담 → (경로/의뢰 선택 or 깊이상한) → 종료. 갈림길 노드는
 #            깊이상한에서 끝내지 않고 **길을 고르게** 한다 — 안 고르면 다음 노드가 없다.
 # 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
+# ------------------------------------------------------------
+# [v3] 선택지 화자 분리 + 종료 턴 되묻기 금지 + 공용 규칙 사용(실측 2026-09-09).
+# 구현(요약): ① 톤 규칙과 선택지 지시가 한 문장에 붙어 있어 도깨비 말투가 **플레이어
+#              선택지**에까지 적용됐다 — "이 장어를 복분자술과 함께 맛보겠느냐?"를
+#              플레이어가 고르게 되어 화자가 뒤집혔다. 선택지 규칙을 따로 뗀다.
+#            ② 종료 턴은 choices가 빈 배열인데 대사가 질문으로 끝났다("층계마다 손길을
+#              대어 보겠느냐?") — 답할 수단이 없다. 종료 턴엔 되묻지 말라고 못 박는다.
+#            ③ AI는 시나리오를 들고 있지 않다 — 다음 행선지를 아는 척하지 못하게 막는다
+#              (실측: "기억석 다음 조각을 얻으려면 어디로 가야 하느냐?" 선택지 생성).
+#            ④ NO_SOURCE_RULE을 core.wording 공용 상수로 옮겨 두 대사 경로가 같이 쓴다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import json
 
 from app.config import get_settings
 from app.core.logger import get_logger
 from app.core.wording import (
+    FOOD_CONTENT_RULE,
+    NO_SOURCE_RULE,
+    NO_STAGE_DIRECTION_RULE,
     clean_line,
     history_text,
     humanize_ref,
@@ -41,16 +55,27 @@ from app.region.memory_cache import get_region_cache
 logger = get_logger(__name__)
 
 _llm = get_llm()
-_TONE = "도깨비 말투(어미 '~니라/~겠느냐', 감탄 '허허'), 2~3문장, 군더더기·메타설명 금지."
+_TONE = (
+    "도깨비 말투(어미 '~니라/~겠느냐', 감탄 '허허'), 2~3문장, 군더더기·메타설명 금지. "
+    + NO_STAGE_DIRECTION_RULE
+)
+# 선택지는 **나그네(플레이어)의 말**이다. 톤 규칙과 한 문장에 붙여 놓았더니 도깨비 말투가
+# 선택지까지 먹어 화자가 뒤집혔다(실측: 플레이어가 "…맛보겠느냐?"를 고르게 됨).
+_CHOICE_RULE = (
+    "선택지는 도깨비가 아니라 **나그네(플레이어)가 도깨비에게 할 말**이다. "
+    "도깨비 어미(~니라/~겠느냐/~도다)를 쓰지 말고, 나그네가 묻거나 하려는 바를 "
+    "평범한 현대 한국어 한 문장(20자 이내)으로 쓴다."
+)
+# AI는 시나리오를 들고 있지 않은 무상태 서비스다 — 다음 노드를 모른다.
+_NO_NEXT_NODE_RULE = (
+    "다음에 갈 장소가 어디인지는 모른다. 다음 행선지를 지목하거나 지어내지 말고, "
+    "선택지로도 묻게 하지 마라."
+)
 _COLLECT_ID = "collect"
 _COLLECT_TEXT = "의뢰를 받고 기억석을 찾아 나선다"
 _REST_TEXT = "요기하고 길을 잇는다"
 _FOOD_KINDS = {"food", "cafe"}
-# 원문을 못 구했을 때(이름만 아는 장소) 붙이는 제동. 없으면 모델이 내부 구조를 지어낸다.
-_NO_SOURCE_RULE = (
-    "이 장소는 이름 말고 확인된 자료가 없다. 내부 구조·시설·역사를 지어내지 말고, "
-    "이름에서 알 수 있는 것과 분위기만 짧게 말하라."
-)
+# 원문을 못 구했을 때(이름만 아는 장소) 붙이는 제동은 core.wording.NO_SOURCE_RULE 공용.
 
 
 async def _grounding(node_id: str, node_name: str, region_id: str = "") -> str:
@@ -136,9 +161,7 @@ async def run_branching(
             # 여기서 조각을 찾으라고 하면 플레이어는 없는 것을 뒤진다(실측 회귀).
             body = (
                 "이곳은 요기하고 쉬어 가는 자리다. 조각·의뢰 이야기는 꺼내지 말고, "
-                "여정 중에 한 술 뜨고 가라고 권하라."
-                + (" 아는 범위에서 무엇을 맛보면 좋을지 한마디 곁들여도 좋다."
-                   if grounded else " 메뉴·시설은 확인된 바 없으니 지어내지 마라.")
+                "여정 중에 한 술 뜨고 가라고 권하라. " + FOOD_CONTENT_RULE
             )
         else:
             # ⚠️ 고른 길은 '앞으로 갈 곳'이고 조각은 '지금 이곳'에 있다. 이 둘을 구분해 주지
@@ -153,7 +176,10 @@ async def run_branching(
         prompt = (
             head + body
             + (_fork_block(branch) if not done else "")
-            + ("" if grounded else f"\n{_NO_SOURCE_RULE}")
+            # 종료 턴은 선택지가 없다 — 질문으로 끝내면 플레이어가 답할 수단이 없다.
+            + ("\n대사를 물음으로 끝내지 마라. 할 일을 일러 주고 마무리한다." if done else "")
+            + ("" if grounded else f"\n{NO_SOURCE_RULE}")
+            + f"\n{_NO_NEXT_NODE_RULE}"
             + f"\n{_TONE}"
         )
         line = _line_only(await _llm.generate(prompt))
@@ -172,10 +198,13 @@ async def run_branching(
         + (f"[방금 고른 것] {last_player_text(history)}\n" if last_player_text(history) else "")
         + ("[귀띔] 이 자리에서 곧 길이 갈린다 — 아직 고르게 하지는 말고 흘리듯 언급해도 좋다.\n"
            if is_fork else "")
-        + ("" if grounded else f"{_NO_SOURCE_RULE}\n")
-        + ("[이곳은 요기하는 자리다 — 조각·의뢰 이야기는 꺼내지 마라.]\n" if is_food else "")
-        + f"규칙: {_TONE} 그리고 플레이어가 고를 짧은 선택지 2개를 제안한다. "
-        f"방금 고른 것이 있으면 그 말을 받아서 이어가라. 모은 단서가 있으면 언급해도 좋다.\n"
+        + ("" if grounded else f"{NO_SOURCE_RULE}\n")
+        + (f"[이곳은 요기하는 자리다 — 조각·의뢰 이야기는 꺼내지 마라. {FOOD_CONTENT_RULE}]\n"
+           if is_food else "")
+        + f"[대사 규칙] {_TONE} 방금 고른 것이 있으면 그 말을 받아서 이어가라. "
+        f"모은 단서가 있으면 언급해도 좋다. {_NO_NEXT_NODE_RULE}\n"
+        f"[선택지 규칙] 플레이어가 고를 선택지 2개를 만든다. {_CHOICE_RULE} "
+        f"앞선 대화에서 이미 나온 것을 다시 묻는 선택지는 만들지 마라.\n"
         f'반드시 아래 JSON만 출력: {{"line": "<대사>", "choices": ["<선택지1>", "<선택지2>"]}}'
     )
     raw = await _llm.generate(prompt)

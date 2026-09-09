@@ -56,7 +56,7 @@ def test_inventory_ids_never_reach_the_prompt():
     assert "clue:" not in prompt
     assert "fragment:" not in prompt
     assert "단서 「四結」" in prompt
-    assert "기억석 셋째 조각" in prompt
+    assert "기억석 세 번째 조각" in prompt
 
 
 # ── ② history 화자 · 직전 선택 ────────────────────────────────
@@ -94,7 +94,7 @@ def test_choosing_a_path_ends_the_dialogue():
     assert out["done"] is True
     assert out["choices"] == []
     assert "[플레이어가 고른 다음 행선지] 혼불을 따라" in prompt
-    assert "기억석 둘째 조각" in prompt
+    assert "기억석 두 번째 조각" in prompt
     # 조각은 '지금 이곳'에 있다 — 이 구분이 없으면 힌트가 다음 노드 장소로 샌다(실측 회귀).
     assert "지금 이곳 '세종로공원'에 숨은" in prompt
     assert "다음 행선지의 장소를 힌트로 삼지 마라" in prompt
@@ -206,9 +206,9 @@ def test_ungrounded_node_gets_a_hallucination_brake():
             _a.run(bs.run_branching(node_id="wish_126081", node_name="해운대해수욕장"))
     # 프롬프트 검증은 _run 경로로(같은 조건: ctx == node_name)
     _, prompt = _run(node_name="해운대해수욕장", grounding="해운대해수욕장")
-    assert "지어내지 말고" in prompt
+    assert bs.NO_SOURCE_RULE in prompt
 
 
 def test_grounded_node_has_no_brake():
     _, prompt = _run(node_name="세종로공원")     # 기본 grounding은 원문 텍스트
-    assert "지어내지 말고" not in prompt
+    assert bs.NO_SOURCE_RULE not in prompt

@@ -25,12 +25,12 @@ from app.core.wording import (
 def test_stone_names_survive_any_region_label():
     """fragment_id에는 자동 판정된 지역 라벨이 박힌다 — 6개 지역 실측값 그대로."""
     cases = {
-        "fragment:해운대구_stone_1of4": "기억석 첫째 조각",
-        "fragment:경주시_stone_2of4": "기억석 둘째 조각",
-        "fragment:완산구_stone_3of4": "기억석 셋째 조각",
-        "fragment:서귀포시_stone_4of4": "기억석 넷째 조각",
-        "fragment:정선군_stone_3of3": "기억석 셋째 조각",
-        "fragment:이 지역_stone_1of5": "기억석 첫째 조각",   # 주소 판정 실패 시 폴백 라벨
+        "fragment:해운대구_stone_1of4": "기억석 첫 번째 조각",
+        "fragment:경주시_stone_2of4": "기억석 두 번째 조각",
+        "fragment:완산구_stone_3of4": "기억석 세 번째 조각",
+        "fragment:서귀포시_stone_4of4": "기억석 네 번째 조각",
+        "fragment:정선군_stone_3of3": "기억석 세 번째 조각",
+        "fragment:이 지역_stone_1of5": "기억석 첫 번째 조각",   # 주소 판정 실패 시 폴백 라벨
     }
     for ref, expected in cases.items():
         assert humanize_ref(ref) == expected, ref
@@ -53,7 +53,7 @@ def test_inventory_line():
     assert inventory_line(None) == "아직 모은 것이 없다."
     assert inventory_line({"items": []}) == "아직 모은 것이 없다."
     line = inventory_line({"items": ["clue:ㄱ", "fragment:완산구_stone_2of4"]})
-    assert line == "지금까지 모은 것: 단서 「ㄱ」, 기억석 둘째 조각"
+    assert line == "지금까지 모은 것: 단서 「ㄱ」, 기억석 두 번째 조각"
     assert "clue:" not in line and "fragment:" not in line
 
 
