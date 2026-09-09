@@ -84,6 +84,7 @@ from app.scenario.node_schema import (
     infer_motivations,
     link_state_graph,
     select_mission_type,
+    synthesize_npc,
 )
 from app.scenario.prologue_content import fallback_prologue, generate_prologue
 from app.scenario.qa_graph import run_qa_loop
@@ -393,14 +394,35 @@ async def _overview_for(node: dict) -> str | None:
         logger.warning("노드 %s overview 조회 실패: %s", node.get("node_id"), e)
         return None
 
+def _dialogue_player_state(meta: dict) -> dict:
+    """그 노드에 **도착한 시점의** 진행도. 대사 프롬프트의 [컨텍스트]로 들어간다.
+
+    ⚠️ 예전에는 빈 dict를 넘겼다 — progress_line이 "이제 막 여정을 시작한 참이다"를
+    돌려주는 바람에 피날레(stage=완료) 프롬프트까지 '방금 시작한 사람' 취급을 했고,
+    마지막 노드 도깨비가 첫인사를 했다(실측 2026-09-09: 신석구 사택 터).
+    조각 N번째 노드에 도착했으면 이미 N-1개를 모은 상태다.
+    """
+    total = meta.get("stone_total") or 0
+    stone_no = meta.get("stone_no")
+    if meta.get("is_food") or not isinstance(stone_no, int) or stone_no <= 1:
+        # 식음은 조각 축에 없고, 첫 노드는 아직 모은 게 없다 — 둘 다 빈 dict가 맞다
+        # (progress_line이 "이제 막 여정을 시작한 참이다"로 풀어 준다).
+        return {}
+    return {"progress": stone_no - 1, "required": total}
+
+
 async def _dialogue_for(node: dict, meta: dict) -> str:
     """대화 그래프로 장소기반 대사 생성. 식음=요기 권유, 관광=등장/완료. 실패 시 고정 대사 폴백."""
     stage = "식음" if meta["is_food"] else ("완료" if meta["is_finale"] else "등장")
+    # 앱이 표시할 NPC를 대사에도 그대로 쓴다 — synthesize_npc는 결정적이라 enrich_quest가
+    # 나중에 만드는 npc와 이름·모티프가 반드시 일치한다(motivation 필드만 다르고 대사엔 안 쓴다).
+    npc = synthesize_npc(node, [], is_food=meta["is_food"], is_finale=meta["is_finale"])
     try:
         # node_name을 넘기지 않으면 프롬프트의 장소명·페르소나 이름이 node_id가 된다
         # (실측: "너는 'tour_1604697'을(를) 수호하는 도깨비 NPC 'tour_1604697 도깨비'다").
         text, _hit = await run_dialogue(
-            node["node_id"], stage, {}, node_name=node.get("name") or "",
+            node["node_id"], stage, _dialogue_player_state(meta),
+            node_name=node.get("name") or "", npc=npc,
         )
         return text or _fixed(node, meta)
     except Exception as e:  # LLM 오류 등 → 시나리오 생성 자체는 막지 않음

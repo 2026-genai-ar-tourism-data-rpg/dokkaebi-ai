@@ -88,7 +88,7 @@ def _stub_dialogue(monkeypatch, *, leak: bool = False) -> dict:
     by_name = {name: line for name, _ov, line in _MEASURED}
 
     async def fake_run_dialogue(node_id, stage, player_state, *, node_name="",
-                                region_id="", qa_feedback=""):
+                                region_id="", qa_feedback="", npc=None):
         calls["n"] += 1
         calls["feedback"].append(qa_feedback)
         text = _LEAKED_DIALOGUE if leak else by_name.get(node_name, "허허, 흔적을 살펴보거라.")
@@ -170,7 +170,7 @@ def test_결함2_진짜_환각은_경고로_남는다(monkeypatch):
     _stub_nodes(monkeypatch)
 
     async def fake_run_dialogue(node_id, stage, player_state, *, node_name="",
-                                region_id="", qa_feedback=""):
+                                region_id="", qa_feedback="", npc=None):
         return "이곳에는 1919년 세워진 첨성대와 석굴암이 있느니라, 허허.", False
 
     monkeypatch.setattr(generator, "run_dialogue", fake_run_dialogue)
