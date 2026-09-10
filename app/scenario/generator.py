@@ -97,6 +97,7 @@ from app.scenario.node_schema import (
     select_mission_type,
     synthesize_npc,
 )
+from app.scenario.prologue_content import fallback_prologue, generate_prologue
 from app.scenario.qa_graph import run_qa_loop
 from app.scenario.request import ScenarioRequest
 from app.scenario.route_branching import attach_branch, pick_alternate, select_branch_point, validate_tree
@@ -267,11 +268,17 @@ async def generate_basic_scenario(
 
     # 3) 지역 인메모리 캐시 워밍 → 대화 그래프 context_load가 이 텍스트를 grounding으로 사용
     get_region_cache().warm(region, {n["node_id"]: n["overview"] for n in route})
-    # 4) 장소기반 NPC 대사 생성 (그래프 재사용, 병렬). 실패/비활성 시 고정 대사
+    # 4) 장소기반 NPC 대사 생성 (그래프 재사용, 병렬) + 코스 오프닝 프롤로그(코스당 1회).
+    #    실패/비활성 시 고정 대사·고정 프롤로그(지역명만 반영)로 폴백.
+    first_stone = next((n for n, m in zip(route, metas) if not m["is_food"]), route[0] if route else None)
     if with_dialogue:
-        dialogues = await asyncio.gather(*[_dialogue_for(n, m) for n, m in zip(route, metas)])
+        dialogues, prologue = await asyncio.gather(
+            asyncio.gather(*[_dialogue_for(n, m) for n, m in zip(route, metas)]),
+            generate_prologue(region, first_stone),
+        )
     else:
         dialogues = [_fixed(n, m) for n, m in zip(route, metas)]
+        prologue = fallback_prologue(region, (first_stone or {}).get("name") or region)
     # 4.5) 고정 콘텐츠(생성 시 1회): 비인기 라벨(mock) + 퀴즈·지령(LLM, grounding). 아키텍처 3-5
     for n, m in zip(route, metas):
         if not m["is_food"]:                  # 식음노드는 비인기 라벨 대상 아님
@@ -341,6 +348,7 @@ async def generate_basic_scenario(
         "is_branching": is_branching,             # 갈림길(route 분기) 포함 여부
         "route_tree": route_tree,                 # 분기 그래프(선택→다음 노드). 선형이면 None
         "qa_flags": qa_flags,                     # 사람이 읽는 생성 품질 경고(정상이면 [])
+        "prologue": prologue,                     # 코스 오프닝 대본(화자 순서·beat 고정, 대사만 생성)
     }
 
 async def _apply_branching(
