@@ -32,7 +32,23 @@
 #            ④ "기억석 첫째 조각"을 모델이 사람으로 읽었다(실측: "이미 첫째가 가져갔으니")
 #              → "첫 번째"처럼 번째를 붙여 서수임을 분명히 한다.
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v4] v3 안전망의 오탐 차단 + 진행도 계산을 여기로 모은다(점검 20260909-2).
+# 구현(요약): ① _is_stage_direction이 "도깨비 어미로 안 끝나면 지문"이라 **띄어 쓴 괄호**를
+#              통째로 지웠다 — "세조 때 (1468년) 다시 부어" → 연도 삭제, "보신각 (普信閣)이니라"
+#              → 병기 삭제 + 이중 공백. 지문이라는 **양성 신호**(…며/…뒤/…한다/…힌트)를
+#              요구하고, 한자·연도·라틴 표기 같은 주석성 괄호는 아예 후보에서 뺀다.
+#            ② 진행도(player_state) 계산이 generator에만 있어 QA 재생성 경로는 늘 빈 dict를
+#              넘겼다(= 피날레가 "이제 막 시작"). progress_line과 짝인 progress_state를
+#              여기 두고 두 경로가 같이 쓴다 — 이 파일 v1 주석의 경고와 같은 사유.
+#            ③ 대사 캐시 키가 진행도를 안 봐서(persona_inject) 같은 노드·같은 단계면
+#              다른 코스의 진행도 대사가 24시간 재사용됐다 → progress_cache_token.
+#            ④ 술 금지 규칙이 식음 노드에만 걸려 있었다 — 양조장·주막터 같은 관광 노드도
+#              원문에 술이 적혀 있으면 그대로 권한다 → NO_ALCOHOL_RULE로 분리해 공용.
+#            ⑤ 미션 생성 경로에는 원문 없음 제동이 없었다 → NO_SOURCE_MISSION_RULE.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
+import hashlib
 import re
 
 # fragment_id 형식은 서버가 파싱하는 계약이다(finaleGateFragments) — 여기선 읽기만 한다.
@@ -101,10 +117,37 @@ NO_STAGE_DIRECTION_RULE = (
 #    반복해 권했다. 이건 환각이 아니라 **원문 복창**이다 — TourAPI overview 자체에
 #    "이 장어를 안주 삼아 복분자술을 먹어보는 것이 큰 희망"이라고 적혀 있다.
 #    그래서 "지어내지 마라"로는 안 막힌다. 원문에 있어도 권하지 말라고 명시한다.
-FOOD_CONTENT_RULE = (
+# ⚠️ [v4] 이 제동을 식음 노드에만 걸어 두면 안 된다 — 양조장·주막터·전통주 갤러리처럼
+#    overview에 술이 적힌 **관광** 노드가 실제로 있고, 그 노드의 대사 경로엔 근거가 없었다.
+#    술 금지는 장소 종류가 아니라 '원문에 술이 있는가'로 걸어야 한다(alcohol_in_source).
+NO_ALCOHOL_RULE = (
     "장소 정보에 술·주류가 적혀 있더라도 대사에서 권하거나 언급하지 않는다 — "
-    "누가 읽을지 모르는 대사다. 음식·자리 이야기로만 권한다."
+    "누가 읽을지 모르는 대사다."
 )
+
+FOOD_CONTENT_RULE = NO_ALCOHOL_RULE + " 음식·자리 이야기로만 권한다."
+
+# 미션(지령·힌트·퀴즈) 생성 경로의 원문 없음 제동. 대사 경로(NO_SOURCE_RULE)와 짝이다 —
+# ⚠️ 미션 프롬프트는 "정답은 [장소 정보]에서 검증 가능해야 한다"고 요구하는데, 원문이 빈
+#    노드에서는 그 지시가 성립하지 않아 모델이 퀴즈를 통째로 창작했다(실측 20260909-2).
+NO_SOURCE_MISSION_RULE = (
+    "이 장소는 이름 말고 확인된 자료가 없다. 역사·연도·인물·내부 시설을 지어내지 말고, "
+    "현장에서 눈으로 확인할 수 있는 것(간판·건물 외관·주변 지형)만으로 미션을 만든다. "
+    "원문으로 확인할 수 없는 사실을 묻는 퀴즈는 내지 않는다."
+)
+
+# 원문에 술이 적혀 있는가 — 있으면 관광 노드에도 NO_ALCOHOL_RULE을 건다.
+# ⚠️ 한 글자 '술'을 그냥 찾으면 "예술·미술관·기술"에 전부 걸린다(인사동 overview가 그렇다).
+#    술이 아닌 '술' 합성어의 앞 글자를 제외하고 본다.
+_ALCOHOL_RE = re.compile(
+    r"막걸리|소주|맥주|청주|약주|탁주|동동주|복분자주|과실주|와인|위스키|사케|"
+    r"양조|주막|주점|주류|안주|(?<![예미기수시마무의학전산요점저논화침봉검])술"
+)
+
+
+def alcohol_in_source(text: str | None) -> bool:
+    """장소 원문이 술을 언급하는가(= 대사에 술 금지 규칙을 붙여야 하는가)."""
+    return bool(_ALCOHOL_RE.search(text or ""))
 
 
 # 연기 지문 안전망. 프롬프트 규칙(NO_STAGE_DIRECTION_RULE)만으로는 안 잡힌다 —
@@ -127,10 +170,41 @@ _IN_CHARACTER_END_RE = re.compile(
 )
 
 
+# [v4] 지문 판정은 **양성 신호**를 요구한다. v3은 "도깨비 어미로 안 끝나면 지문"이라
+# 근거 있는 주석성 괄호까지 지웠다(실측 20260909-2):
+#   "이 종은 세조 때 (1468년) 다시 부어 만든 것이니라." → 연도가 사라짐
+#   "여기가 보신각 (普信閣)이니라."                      → 병기가 사라지고 공백만 남음
+# 지문은 모양이 정해져 있다 — 연결어미(…며/…면서/…뒤/…채/…듯)로 끊기거나, 현재형
+# 서술(…한다/…내민다)로 닫히거나, 동작 명사(윙크/한숨/미소)로 끝난다.
+# ⚠️ 동작 명사는 **닫힌 목록**으로 둔다. "짧은 순한글이면 지문"처럼 넓히면 "종로 (육조)"
+#    같은 우리말 병기까지 지운다 — 지우는 쪽이 되돌릴 수 없으므로 아는 것만 지운다.
+#    실측 20260909-2 실 LLM 주행: "…찾아볼까? (윙크)"가 앱 화면까지 나갔다.
+_DIRECTION_NOUNS = (
+    "힌트", "지문", "한숨", "미소", "웃음", "침묵", "표정", "손짓", "몸짓",
+    "윙크", "눈짓", "고갯짓", "헛기침", "박수", "하품", "손사래", "끄덕임",
+)
+_DIRECTION_END_RE = re.compile(
+    r"(?:며|면서|뒤|채|듯|다|%s)[.!?…\s]*$" % "|".join(_DIRECTION_NOUNS)
+)
+# 한자·연도·라틴 표기처럼 '주석'인 괄호. 지문일 수 없으므로 후보에서 아예 뺀다.
+_ANNOTATION_INNER_RE = re.compile(
+    r"^[\s0-9A-Za-z㐀-䶿一-鿿.,·~\-–—/년월일세기제호년경]+$"
+)
+
+
 def _is_stage_direction(inner: str) -> bool:
-    """괄호 안이 연기 지문인가(= 대사가 아닌 서술인가)."""
+    """괄호 안이 연기 지문인가(= 대사가 아닌 서술인가).
+
+    셋을 모두 만족해야 지문이다 — ① 주석(한자 병기·연도·라틴 표기)이 아니고
+    ② 도깨비 어미로 끝나지 않으며 ③ 지문의 끝맺음 모양을 갖췄다.
+    셋 중 하나라도 어긋나면 **본문으로 보고 남긴다** — 지우는 쪽이 되돌릴 수 없다.
+    """
     inner = inner.strip()
-    return bool(inner) and not _IN_CHARACTER_END_RE.search(inner)
+    if not inner or _ANNOTATION_INNER_RE.match(inner):
+        return False
+    if _IN_CHARACTER_END_RE.search(inner):
+        return False
+    return bool(_DIRECTION_END_RE.search(inner))
 
 
 def _strip_stage_directions(lines: list[str]) -> list[str]:
@@ -287,3 +361,43 @@ def progress_line(player_state: dict | None) -> str:
             parts.append("품에 든 것은 " + ", ".join(named) + "이다")
 
     return " · ".join(parts) if parts else "이제 막 여정을 시작한 참이다."
+
+
+# ── 진행도 상태 [v4] ────────────────────────────────────────────
+# progress_line은 '상태 → 문장'이고, 아래는 '노드 위치 → 상태'다. 둘이 떨어져 있으면
+# 한쪽 경로만 상태를 채우게 된다 — 실제로 QA 재생성 경로(qa_graph)는 늘 빈 dict를 넘겨
+# 피날레 프롬프트가 "이제 막 여정을 시작한 참이다"로 나갔다(실측 20260909-2).
+
+def stone_position(fragment_id: str | None) -> tuple[int | None, int | None]:
+    """fragment_id에서 (조각 번호, 총 조각 수)를 읽는다. 샛길·식음이면 (None, None)."""
+    stone = _STONE_RE.match(str(fragment_id or ""))
+    if not stone:
+        return None, None
+    return int(stone.group("no")), int(stone.group("total"))
+
+
+def progress_state(stone_no: int | None, stone_total: int | None,
+                   *, is_food: bool = False) -> dict:
+    """그 노드에 **도착한 시점의** 진행도 → progress_line이 읽는 player_state.
+
+    조각 N번째 노드에 도착했으면 이미 N-1개를 모은 상태다. 식음(조각 축 밖)과
+    첫 노드(아직 모은 게 없다)는 빈 dict가 맞다 — progress_line이 "이제 막 여정을
+    시작한 참이다"로 풀어 준다.
+    """
+    if is_food or not isinstance(stone_no, int) or stone_no <= 1:
+        return {}
+    state: dict = {"progress": stone_no - 1}
+    if isinstance(stone_total, int) and stone_total > 0:
+        state["required"] = stone_total
+    return state
+
+
+def progress_cache_token(player_state: dict | None) -> str:
+    """대사 캐시 키에 들어갈 진행도 지문(指紋).
+
+    ⚠️ 진행도는 프롬프트 입력이다 — 키에 없으면 같은 노드·같은 단계라는 이유로 다른
+    코스의 진행도 대사가 TTL 내내 재사용된다(실측 20260909-2: 2번째 조각에서 만든
+    대사가 4번째 조각 플레이어에게 그대로 나감). 프롬프트에 실제로 들어가는 문장을
+    그대로 해싱해, 표기 규칙이 바뀌어도 키가 따라 움직이게 한다.
+    """
+    return hashlib.sha1(progress_line(player_state).encode("utf-8")).hexdigest()[:8]

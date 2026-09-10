@@ -553,6 +553,18 @@ _FOOD_LADDER = {
 }
 
 
+# 모델이 오답 힌트를 못 만들었을 때 각 층이 채우는 폴백 문구. **여기가 단일 출처다** —
+# node_content가 이 상수를 가져다 쓰고(중복 리터럴 금지), build_hint_ladder는 이 문구를
+# 사다리 H3으로 승격시키지 않는다(그러면 사다리가 구체적→범용으로 역행한다).
+GENERIC_WRONG_HINT = "다시 골라 보거라."            # 선택형(DIALOGUE_FIND)
+GENERIC_QUIZ_WRONG_HINT = "다시 살펴보거라."         # 4지선다(QUIZ_FIND)
+GENERIC_ACTION_WRONG_HINT = "장소 정보와 화면의 목표를 다시 대조해 보거라."   # _action_quiz
+
+_GENERIC_WRONG_HINTS = {
+    "", GENERIC_WRONG_HINT, GENERIC_QUIZ_WRONG_HINT, GENERIC_ACTION_WRONG_HINT,
+}
+
+
 def _mission_target(mission: dict[str, Any], quest: dict[str, Any]) -> str:
     """이 노드에서 실제로 찾는 것. 범용 폴백 힌트를 장소·미션에 붙이는 데 쓴다."""
     for key in ("find", "object", "structure", "monster"):
@@ -583,14 +595,22 @@ def build_hint_ladder(quest: dict[str, Any]) -> dict[str, Any]:
     hints = _string_list(mission.get("hints")) or _string_list(objective.get("hints"))
     h1 = hints[0] if hints else f"{name}에서 가장 눈에 띄는 흔적부터 살펴보거라."
     h2 = hints[1] if len(hints) > 1 else f"지령이 이르는 '{target}' 가까이를 다시 살펴보거라."
-    h3 = str(quiz.get("wrong_hint") or "") or (
+    # H3은 사다리의 마지막 칸 = 가장 구체적이어야 한다. 퀴즈 오답 힌트는 그 자리에 쓸 만하지만,
+    # **범용 폴백 문구**("다시 골라 보거라.")까지 쓰면 H2보다 덜 구체적인 칸이 된다 —
+    # DIALOGUE_FIND는 to_quiz가 늘 고정 문구를 넣어 5노드 전부 그랬다(실측 20260909-2).
+    wrong_hint = str(quiz.get("wrong_hint") or "").strip()
+    h3 = wrong_hint if wrong_hint not in _GENERIC_WRONG_HINTS else (
         hints[2] if len(hints) > 2 else f"'{target}'을(를) 찾아 화면에 담으면 조각이 열리느니라."
     )
 
+    # 정답이 샌 칸은 **문장째** 폴백으로 바꾼다. 예전에는 문장 가운데의 정답만
+    # 자리표시자로 치환해서, 조사가 남아 "정답과 연결되는 대상와 연계된 예약 가능 상품을
+    # 확인하라"가 그대로 앱 화면에 나갔다(실 LLM 주행 20260909-2, 한복남 경복궁점).
+    # 가리는 것은 응급 처치일 뿐이다 — 제대로 된 힌트는 run_qa → regen_mission이 다시 만든다.
     answer = _quiz_answer_text(quiz)
-    h1 = _remove_answer_leak(h1, answer)
-    h2 = _remove_answer_leak(h2, answer)
-    h3 = _remove_answer_leak(h3, answer)
+    h1 = _hint_without_answer(h1, answer, f"{name}에서 가장 눈에 띄는 흔적부터 살펴보거라.")
+    h2 = _hint_without_answer(h2, answer, f"지령이 이르는 '{target}' 가까이를 다시 살펴보거라.")
+    h3 = _hint_without_answer(h3, answer, f"'{target}'을(를) 찾아 화면에 담으면 조각이 열리느니라.")
 
     return {
         "H1": h1,
@@ -903,13 +923,23 @@ def run_qa(node: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
     quiz = node.get("quiz") if isinstance(node.get("quiz"), dict) else {}
     answer = _quiz_answer_text(quiz)
     ladder = node.get("hint_ladder") if isinstance(node.get("hint_ladder"), dict) else {}
-    hint_text = " ".join(str(ladder.get(key) or "") for key in ("H1", "H2", "H3"))
+    mission = node.get("mission") if isinstance(node.get("mission"), dict) else {}
+    objective = node.get("objective") if isinstance(node.get("objective"), dict) else {}
+    # ⚠️ 사다리만 보면 안 된다 — build_hint_ladder가 이미 유출된 칸을 폴백으로 바꿔 놓아
+    #    증거가 지워진 뒤다(그래서 regen_mission 분기가 사실상 죽어 있었다). 모델이 쓴
+    #    **원본 힌트**까지 같이 본다: 유출은 '가렸으니 됐다'가 아니라 다시 쓸 사유다.
+    hint_text = " ".join([
+        *(str(ladder.get(key) or "") for key in ("H1", "H2", "H3")),
+        *_string_list(mission.get("hints")),
+        *_string_list(objective.get("hints")),
+        str(quiz.get("wrong_hint") or ""),
+    ])
     dialogue = str(node.get("npc_dialogue") or "")
     overview = str(source.get("overview") or "")
 
-    # ⚠️ 판정은 _remove_answer_leak과 **같은 기준**이어야 한다. 예전엔 판정은 부분문자열,
-    #    제거는 무조건 치환이라 (a) 조사에 오탐이 나고 (b) 제거가 먼저 돌아 증거를 지운
-    #    탓에 판정이 늘 False가 됐다 — regen_mission 분기가 사실상 죽어 있었다.
+    # ⚠️ 판정 기준(answer_leaked)은 사다리의 가리기와 같은 함수를 쓴다. 다만 **대상**은
+    #    가려진 사다리가 아니라 원본 힌트다 — 가리기는 응급 처치고, 판정은 "다시 쓸 것인가"를
+    #    정하는 자리이기 때문이다(20260909-2에 실제로 재생성이 안 돌아 마스킹 문구가 나갔다).
     answer_leak = answer_leaked(hint_text, answer)
     tone_ok = not dialogue or any(marker in dialogue for marker in _TONE_MARKERS)
 
@@ -997,7 +1027,7 @@ def _action_quiz(quest: dict[str, Any]) -> dict[str, Any]:
         "answer_idx": answer_idx,
         "correct": {"exp": 30, "coupon": 200},   # 명세 6-1 예시 정합(보상 증폭은 보너스만)
         "hints": "ladder",
-        "wrong_hint": str(quiz.get("wrong_hint") or "장소 정보와 화면의 목표를 다시 대조해 보거라."),
+        "wrong_hint": str(quiz.get("wrong_hint") or GENERIC_ACTION_WRONG_HINT),
     }
 
 
@@ -1092,8 +1122,6 @@ def _quiz_answer_text(quiz: dict[str, Any]) -> str:
 # 으로 깨져 나갔다(실측 2026-09-09). 짧은 정답은 **어절 경계**로만 본다.
 _ANSWER_TOKEN_MIN_LEN = 3          # 이 길이부터는 부분문자열 매치가 안전하다
 _WORD_SPLIT_RE = re.compile(r"[^0-9A-Za-z가-힣\u4e00-\u9fff]+")
-_WORD_SPLIT_CAPTURE_RE = re.compile(r"([^0-9A-Za-z가-힣\u4e00-\u9fff]+)")
-_ANSWER_PLACEHOLDER = "정답과 연결되는 대상"
 
 
 def _answer_words(text: str) -> list[str]:
@@ -1114,20 +1142,19 @@ def answer_leaked(text: str, answer: str) -> bool:
     return any(word == answer or _stem(word) == answer for word in _answer_words(text))
 
 
-def _remove_answer_leak(text: str, answer: str) -> str:
-    """유출된 정답만 가린다. 유출이 아니면 **원문을 그대로 둔다**(문장을 깨지 않는다)."""
-    if not answer_leaked(text, answer):
+def _hint_without_answer(text: str, answer: str, fallback: str) -> str:
+    """정답이 샌 힌트를 **통째로** 폴백 문장으로 바꾼다. 안 샜으면 원문 그대로.
+
+    ⚠️ 문장 가운데의 정답만 자리표시자로 바꾸면 조사가 남아 문장이 깨진다 —
+    "정답과 연결되는 대상와 연계된 …"이 실제로 앱 화면까지 나갔다(실측 20260909-2).
+    폴백은 노드에서 유도한 완전한 문장이라 조사가 어긋나지 않는다. 폴백마저 정답을
+    품으면(찾을 대상 이름 = 퀴즈 정답) 마지막 안전 문구로 떨어뜨린다.
+    """
+    if not answer or not answer_leaked(text, answer):
         return text
-    if len(answer) >= _ANSWER_TOKEN_MIN_LEN:
-        cleaned = text.replace(answer, _ANSWER_PLACEHOLDER)
-    else:
-        # 짧은 정답은 어절 단위로만 바꾼다 — 단어 가운데를 건드리면 문장이 깨진다.
-        # split의 캡처 그룹이 구분자(공백·구두점)도 돌려주므로 그대로 이어 붙이면 원문이 복원된다.
-        cleaned = "".join(
-            _ANSWER_PLACEHOLDER if (part == answer or _stem(part) == answer) else part
-            for part in _WORD_SPLIT_CAPTURE_RE.split(text)
-        )
-    return cleaned.strip() or "주변의 근거를 다시 확인해 보거라."
+    if answer_leaked(fallback, answer):
+        return "주변의 근거를 다시 확인해 보거라."
+    return fallback
 
 
 def _valid_state_ref(value: str) -> bool:

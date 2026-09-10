@@ -33,6 +33,12 @@
 #              (실측: "기억석 다음 조각을 얻으려면 어디로 가야 하느냐?" 선택지 생성).
 #            ④ NO_SOURCE_RULE을 core.wording 공용 상수로 옮겨 두 대사 경로가 같이 쓴다.
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v4] 술 제동을 kind가 아니라 **원문**을 보고 건다(점검 20260909-2).
+# 구현(요약): FOOD_CONTENT_RULE이 kind=food/cafe에만 걸려 있었다 — 양조장·주막터처럼
+#            overview에 술이 적힌 관광 노드는 그대로 복창한다(v3에서 확인한 '원문 복창'
+#            경로가 spot에 남아 있었다). 두 대사 경로가 같은 판정을 쓴다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import json
 
@@ -40,8 +46,10 @@ from app.config import get_settings
 from app.core.logger import get_logger
 from app.core.wording import (
     FOOD_CONTENT_RULE,
+    NO_ALCOHOL_RULE,
     NO_SOURCE_RULE,
     NO_STAGE_DIRECTION_RULE,
+    alcohol_in_source,
     clean_line,
     history_text,
     humanize_ref,
@@ -140,6 +148,8 @@ async def run_branching(
     is_food = kind in _FOOD_KINDS
     # 원문 없이 이름만 확보된 경우(위시 합성 노드·식음 후보 등) — 환각 제동을 건다.
     grounded = bool(ctx) and ctx != (node_name or "")
+    # 식음이 아니어도 원문에 술이 적혀 있으면 모델이 그대로 권한다(원문 복창) — v4.
+    alcohol_rule = "" if is_food else (f"\n{NO_ALCOHOL_RULE}" if alcohol_in_source(ctx) else "")
     terminal_ids = {c["id"] for c in terminal}
 
     chose_terminal = last_choice in terminal_ids
@@ -179,6 +189,7 @@ async def run_branching(
             # 종료 턴은 선택지가 없다 — 질문으로 끝내면 플레이어가 답할 수단이 없다.
             + ("\n대사를 물음으로 끝내지 마라. 할 일을 일러 주고 마무리한다." if done else "")
             + ("" if grounded else f"\n{NO_SOURCE_RULE}")
+            + alcohol_rule
             + f"\n{_NO_NEXT_NODE_RULE}"
             + f"\n{_TONE}"
         )
@@ -201,6 +212,7 @@ async def run_branching(
         + ("" if grounded else f"{NO_SOURCE_RULE}\n")
         + (f"[이곳은 요기하는 자리다 — 조각·의뢰 이야기는 꺼내지 마라. {FOOD_CONTENT_RULE}]\n"
            if is_food else "")
+        + (f"{NO_ALCOHOL_RULE}\n" if alcohol_rule else "")
         + f"[대사 규칙] {_TONE} 방금 고른 것이 있으면 그 말을 받아서 이어가라. "
         f"모은 단서가 있으면 언급해도 좋다. {_NO_NEXT_NODE_RULE}\n"
         f"[선택지 규칙] 플레이어가 고를 선택지 2개를 만든다. {_CHOICE_RULE} "

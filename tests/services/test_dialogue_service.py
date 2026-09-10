@@ -30,4 +30,4 @@ def test_question_bypasses_the_line_cache():
         plain = asyncio.run(persona_inject({"node_id": "tour_1", "stage": "등장"}))
 
     assert asked["cache_key"] == ""                    # 캐시 미사용
-    assert plain["cache_key"].endswith("tour_1:등장")   # 정형 대사는 그대로 캐싱
+    assert "tour_1:등장" in plain["cache_key"]          # 정형 대사는 그대로 캐싱

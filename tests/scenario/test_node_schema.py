@@ -421,12 +421,23 @@ def test_pool_fallback_clue_name_is_deterministic():
 
 
 def test_qa_detects_answer_leak_and_tone():
+    """유출은 '가렸으니 됐다'가 아니라 **다시 쓸 사유**다(계약 변경 20260909-2).
+
+    예전에는 사다리에서 정답을 치환한 뒤 그 결과만 보고 통과로 쳤다 — 그래서
+    regen_mission이 한 번도 돌지 않았고, 마스킹 문구("정답과 연결되는 대상와 …")가
+    그대로 앱 화면에 나갔다. 이제 사다리는 여전히 정답을 감추되(플레이어 보호),
+    판정은 원본 힌트를 보고 True를 낸다(QA 루프가 힌트를 다시 만들게).
+    """
     quest = _fixture()
     quest["mission"]["hints"] = ["흥선대원군을 고르거라."]
     node = enrich_quest(quest, _source(content_type_id=28))
-    # 생성 시 유출 문자열을 치환하므로 실제 출력은 통과해야 한다.
+
+    ladder = " ".join(node["hint_ladder"].get(k, "") for k in ("H1", "H2", "H3"))
+    assert "흥선대원군" not in ladder                  # 플레이어에게는 여전히 안 보인다
+    assert "정답과 연결되는 대상" not in ladder         # 자리표시자도 안 보인다
+
     qa = run_qa(node, _source(content_type_id=28))
-    assert qa["answer_leak"] is False
+    assert qa["answer_leak"] is True                  # 모델이 쓴 원본에는 정답이 있었다
     assert qa["tone_ok"] is True
     assert qa["contract_ok"] is True
 

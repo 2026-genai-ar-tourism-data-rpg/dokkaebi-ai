@@ -46,7 +46,8 @@ def test_synthesize_success_and_cached_on_second_call():
     assert first["persona"]["archetype"] == "persona"
     assert first["persona"]["motif"] == "세종대왕"
     # 프롬프트를 고치면 이 버전이 올라가고, 그 순간 옛 대사 캐시가 통째로 무효화된다.
-    assert first["cache_key"] == f"npc:{get_settings().prompt_version}:tour_1:등장"
+    # 꼬리의 진행도 지문은 프롬프트에 실리는 진행도까지 키에 넣는다(persona_inject v4).
+    assert first["cache_key"].startswith(f"npc:{get_settings().prompt_version}:tour_1:등장:")
     assert second["persona"] == first["persona"]
     mock_llm.assert_called_once()  # 두 번째 호출은 캐시에서 서빙
 

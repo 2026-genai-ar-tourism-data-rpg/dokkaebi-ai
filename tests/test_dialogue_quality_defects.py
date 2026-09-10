@@ -72,8 +72,12 @@ def test_진짜_유출은_그대로_잡는다():
     assert answer_leaked("이을 소리가 무엇인지", "가") is False
 
 
-def test_유출_판정과_제거가_같은_기준을_쓴다():
-    """제거가 먼저 돌아 증거를 지우는 바람에 run_qa가 늘 False를 내던 문제."""
+def test_유출은_가리되_다시_쓸_사유로_남긴다():
+    """[계약 변경 20260909-2] 예전엔 '가렸으니 통과'라 재생성이 한 번도 안 돌았다.
+
+    가리기는 응급 처치다 — 판정은 모델이 쓴 원본 힌트를 보고, QA 루프가 힌트를
+    다시 만들게 한다. 실 LLM 주행에서 이 구멍 때문에 마스킹 문구가 화면까지 나갔다.
+    """
     quest = {
         "name": "인사동",
         "quiz": {"options": ["훈민정음", "동국정운"], "answer": 0, "wrong_hint": "다시 보거라."},
@@ -81,10 +85,10 @@ def test_유출_판정과_제거가_같은_기준을_쓴다():
     }
     quest["hint_ladder"] = build_hint_ladder(quest)
 
-    # 힌트에서는 가려졌고,
+    # 플레이어에게는 가려지고,
     assert "훈민정음" not in quest["hint_ladder"]["H1"]
-    # 가려진 힌트에는 더 이상 정답이 없으므로 QA도 통과로 본다(같은 기준).
-    assert run_qa(quest, {"name": "인사동", "overview": ""})["answer_leak"] is False
+    # QA는 원본 힌트를 보고 재생성 사유로 남긴다.
+    assert run_qa(quest, {"name": "인사동", "overview": ""})["answer_leak"] is True
 
 
 # ── 결함 3: 연기 지문이 앱 화면에 그대로 나갔다 ──────────────────

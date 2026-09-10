@@ -23,11 +23,21 @@
 #            그 밖에 빈 페르소나 슬롯(`- 모티프: `)과 빈 발화 라벨을 안 찍고,
 #            진행상황/발화 줄 사이에 빠져 있던 개행을 넣는다.
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v4] 페르소나 슬롯이 한 줄로 뭉치던 것 + 술 제동을 식음 밖으로(점검 20260909-2).
+# 구현(요약): ① v3에서 빈 슬롯을 걷어내며 `'  - '.join(traits)`로 이었더니 개행이 빠져
+#              `- 모티프: 종·소리  - 아키타입: persona  - 성격/말투: …`가 한 줄로 나갔다.
+#              프롬프트 블록의 항목은 한 줄에 하나여야 모델이 슬롯으로 읽는다.
+#            ② 술 금지가 stage=='식음'에만 걸려 있었다 — 양조장·주막터처럼 원문에 술이
+#              적힌 관광 노드는 무방비다. 원문을 보고(alcohol_in_source) 건다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 from app.core.wording import (
     FOOD_CONTENT_RULE,
+    NO_ALCOHOL_RULE,
     NO_SOURCE_RULE,
     NO_STAGE_DIRECTION_RULE,
+    alcohol_in_source,
     progress_line,
 )
 from app.pipeline.state import DialogueState
@@ -79,10 +89,13 @@ async def prompt_assemble(state: DialogueState) -> dict:
     rules += [
         '2~4문장. 도깨비 말투(어미 "~니라/~겠느냐", 감탄 "허허") 유지.',
         NO_STAGE_DIRECTION_RULE,
-f"지금은 '{stage}' 단계다 — {_STAGE_RULES.get(stage, _STAGE_DEFAULT)}",
+        f"지금은 '{stage}' 단계다 — {_STAGE_RULES.get(stage, _STAGE_DEFAULT)}",
     ]
     if stage == "식음":
         rules += [_FOOD_RULE, FOOD_CONTENT_RULE]
+    elif alcohol_in_source(grounding):
+        # 식음이 아니어도 원문에 술이 적혀 있으면 모델은 그대로 복창한다(원문 복창 ≠ 환각).
+        rules.append(NO_ALCOHOL_RULE)
     if not grounding.strip():
         # 이름 말고 아는 게 없는 노드(overview 조회 실패) — 지어내지 말라고 못 박는다.
         rules.append(NO_SOURCE_RULE)
@@ -98,7 +111,7 @@ f"지금은 '{stage}' 단계다 — {_STAGE_RULES.get(stage, _STAGE_DEFAULT)}",
     prompt = (
         f"[시스템]\n"
         f"너는 '{place_name}'을(를) 수호하는 도깨비 NPC '{persona.get('name', '이름 없는 도깨비')}'다.\n"
-        + (f"- {'  - '.join(traits)}\n" if traits else "")
+        + "".join(f"- {trait}\n" for trait in traits)
         + f"\n[장소 실제 정보 — RAG 주입]\n"
         f"{grounding}\n\n"
         f"[규칙]\n"

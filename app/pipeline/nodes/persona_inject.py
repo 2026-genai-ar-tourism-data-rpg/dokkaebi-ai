@@ -23,6 +23,14 @@
 #              바꾸지 않는다 — 장소와 모티프가 어긋나는 문제(QA 리포트 발견 4)는
 #              별도 결정 사항이라 여기서 건드리지 않았다.
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v4] 캐시 키에 진행도를 넣는다 — v3에서 늘어난 프롬프트 입력이 키에 없었다.
+# 구현(요약): 키가 `npc:{version}:{node}:{stage}`인데, v3(⑤)로 진행도가 프롬프트에
+#            들어가면서 **같은 키에 서로 다른 프롬프트**가 매달렸다. 같은 장소가 다른
+#            코스에서 2번째/4번째 조각이면 먼저 만들어진 대사가 TTL(기본 24h) 내내
+#            재사용된다 — "3조각을 모았구나"를 방금 출발한 사람이 듣는다.
+#            프롬프트에 실제로 들어가는 진행도 문장을 그대로 해싱해 키에 붙인다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import json
 
@@ -30,6 +38,7 @@ from app.config import get_settings
 from app.core.cache import get_cache
 from app.core.exceptions import LLMCallError
 from app.core.logger import get_logger
+from app.core.wording import progress_cache_token
 from app.llm.client import get_llm
 from app.pipeline.state import DialogueState
 from app.region.memory_cache import get_region_cache
@@ -54,9 +63,11 @@ async def persona_inject(state: DialogueState) -> dict:
     # 사용자 발화가 있으면 캐시를 쓰지 않는다(빈 키) — 질문이 달라도 같은 대사가 나가면
     # 되묻는 의미가 없다. 발화 없는 정형 대사(등장·완료 등)만 노드·stage로 캐싱한다.
     # QA 재생성(qa_feedback)도 마찬가지 — 캐시를 타면 방금 반려한 그 대사가 그대로 돌아온다.
+    # ⚠️ 진행도는 프롬프트 입력이다 → 키에도 들어가야 한다(v4). 빼면 다른 코스의 진행도
+    #    대사가 재사용된다. 키가 아니라 '프롬프트에 실린 문장'을 해싱해 표기가 바뀌어도 따라온다.
     cache_key = (
         "" if state.get("query") or state.get("qa_feedback")
-        else f"npc:{version}:{node_id}:{stage}"
+        else f"npc:{version}:{node_id}:{stage}:{progress_cache_token(state.get('player_state'))}"
     )
     return {"persona": persona, "cache_key": cache_key}
 
