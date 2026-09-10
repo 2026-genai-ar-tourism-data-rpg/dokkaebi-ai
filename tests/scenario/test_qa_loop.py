@@ -13,6 +13,12 @@
 # ------------------------------------------------------------
 # [v2] 환각 게이트 해제 회귀 테스트 추가 — qa_graph v2 대응.
 # 구현일: 2026-09-06 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v3] 대사 재생성이 받는 **입력**까지 기록한다 — qa_graph v3 대응.
+# 구현(요약): 가짜 run_dialogue가 node_name·qa_feedback만 받는 좁은 시그니처라,
+#            npc·진행도를 안 넘기던 결함(점검 20260909-2 #1)을 이 스위트가 못 봤다.
+#            호출 인자를 통째로 기록해 "무엇을 넘겼는지"도 단언할 수 있게 한다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import asyncio
 
@@ -79,12 +85,20 @@ def _qa_result(*, answer_leak=False, tone_ok=True, hallucination=False, contract
 
 
 def _patch_regen(monkeypatch) -> dict:
-    """재생성 LLM 호출을 가짜로 바꾸고 호출 기록(전달된 피드백)을 돌려준다."""
-    calls: dict = {"dialogue": [], "mission": []}
+    """재생성 LLM 호출을 가짜로 바꾸고 호출 기록을 돌려준다.
 
-    async def fake_run_dialogue(node_id, stage, player_state, *, node_name="",
-                                region_id="", qa_feedback=""):
-        calls["dialogue"].append(qa_feedback)
+    calls["dialogue"]      = 전달된 재작성 지시(피드백) 목록
+    calls["dialogue_args"] = 그 호출에 실제로 넘어간 인자 전체(npc·진행도 검증용)
+    ⚠️ **kwargs로 받는다 — 시그니처를 좁게 고정하면 인자가 늘어난 것을 이 스위트가
+       놓친다(v3에서 실제로 놓쳤다).
+    """
+    calls: dict = {"dialogue": [], "mission": [], "dialogue_args": []}
+
+    async def fake_run_dialogue(node_id, stage, player_state, **kwargs):
+        calls["dialogue"].append(kwargs.get("qa_feedback", ""))
+        calls["dialogue_args"].append(
+            {"node_id": node_id, "stage": stage, "player_state": player_state, **kwargs}
+        )
         return "허허, 다시 쓴 대사니라.", False
 
     async def fake_generate_mission(name, overview, mtype, *, feedback=""):

@@ -34,12 +34,39 @@
 #            짧은 이름 trail_object를 따로 받는다(묘사는 대사용으로 그대로 둔다).
 #            힌트 개수도 타입마다 1개/2개로 갈려 사다리 H2가 범용으로 떨어졌다 → 전부 2개.
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v5] 미션 텍스트도 대사와 같은 필터를 통과시킨다 + 원문 없음 제동(점검 20260909-2).
+# 구현(요약): ① clean_line이 대사 경로에만 걸려 있었다. 앱은 objective.order와
+#              hint_ladder도 서식 없는 Text로 그리는데, 이 경로는 필터가 없어
+#              "**팔각정** 아래를 살펴라. <br>", "(손짓하며) …", "… (규칙에 맞춰
+#              구성했습니다)"가 그대로 화면에 나갈 수 있었다 — 결함보고 20260904 #1과
+#              2026-09-09 ③이 미션 경로로 그대로 재현된다.
+#            ② overview 조회 실패 노드(원문 빈 값)에 "정답은 [장소 정보]에서 검증
+#              가능해야 한다"고만 요구했다 — 근거가 없으니 퀴즈를 통째로 창작한다.
+#              대사 경로의 NO_SOURCE_RULE과 짝인 NO_SOURCE_MISSION_RULE을 붙인다.
+#            ③ DIALOGUE_FIND에 wrong_hint 슬롯이 없어 to_quiz가 고정 문구
+#              "다시 골라 보거라."를 넣었고, 그게 사다리 H3을 먹어 마지막 힌트가 늘
+#              범용이었다(2026-09-09 ⑥의 잔재). 프롬프트에 슬롯을 만든다.
+#            ⑤ 힌트가 힌트가 아니라 **장소 설명**으로 나왔다(실 LLM 주행 20260909-2:
+#              "건청궁은 고종과 명성황후의 생활공간으로 1873년에 지어졌다"). 슬롯 설명이
+#              "<힌트1 넓게>"뿐이라 모델이 개요 요약을 넣었다. 난이도 '어려움'은 H1 한 칸만
+#              노출되므로, H1이 설명문이면 그 노드는 힌트가 아예 없는 것과 같다.
+#            ④ 지령이 문장이 아니라 '토큰 목록'으로 나왔다(실 LLM 주행 20260909-2,
+#              K-컬처 스크린): "1.망각귀_대마왕_조각 2.수호도깨비_반지 3.…_파편".
+#              앱은 이 값을 한 줄 지령으로 그린다 — 프롬프트로 문장을 요구하고,
+#              그래도 섞여 나오는 밑줄은 정리한다(모델이 식별자처럼 쓰는 버릇).
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import json
+import re
 
 from app.core.exceptions import MissionGenerationError
 from app.core.logger import get_logger
+from app.core.wording import NO_SOURCE_MISSION_RULE, clean_line
 from app.llm.client import get_llm
+# 폴백 오답 힌트의 단일 출처는 node_schema다 — 같은 문구를 양쪽에 적어 두면 한쪽만 고쳐
+# 사다리(H3)가 다시 범용으로 떨어진다. node_schema는 app 의존이 없어 순환하지 않는다.
+from app.scenario.node_schema import GENERIC_QUIZ_WRONG_HINT, GENERIC_WRONG_HINT
 
 logger = get_logger(__name__)
 _llm = get_llm()
@@ -99,7 +126,13 @@ async def classify_motivations(name: str, overview: str, fallback: list[str]) ->
     return codes or fallback
 
 
-_BASE = "너는 '{name}'을(를) 지키는 도깨비다. 도깨비 말투(~니라/허허). 아래 [장소 정보]에 근거해서만, 없는 사실은 지어내지 마라.\n[장소 정보] {overview}\n"
+_BASE = (
+    "너는 '{name}'을(를) 지키는 도깨비다. 도깨비 말투(~니라/허허). 아래 [장소 정보]에 근거해서만, 없는 사실은 지어내지 마라.\n"
+    "[장소 정보] {overview}\n"
+    # 앱은 order·hints를 화면에 한 줄씩 그대로 그린다 — 목록·번호·밑줄은 글자로 보인다.
+    "지령(order)과 힌트(hints)는 플레이어가 읽는 자연스러운 한국어 한 문장이다. "
+    "번호 매기기·목록 기호·밑줄(_)로 단어를 잇는 표기를 쓰지 마라.\n"
+)
 
 _PROMPTS = {
     "PHOTO_FIND": _BASE + (
@@ -107,50 +140,51 @@ _PROMPTS = {
         '아래 JSON만: {{"photo_targets":["<촬영할 건축/풍경 요소>","<..>"],'
         '"trail_object":"<따라갈 자취의 짧은 이름, 4~10자>","trail_clue":"<자취 묘사 1문장>",'
         '"steps":["<거쳐갈 지점1>","<지점2>","<지점3>"],'
-        '"find":"<찾을 파편 이름>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"find":"<찾을 파편 이름>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "COLLECT": _BASE + (
         "미션: AR로 이 장소 테마에 맞는 재료/오브젝트를 모으기.\n"
         '아래 JSON만: {{"items":["<재료1>","<재료2>","<재료3>","<재료4>"],'
-        '"reactions":["<탭할 때 도깨비 반응1>","<반응2>"],"order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"reactions":["<탭할 때 도깨비 반응1>","<반응2>"],"order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "DIALOGUE_FIND": _BASE + (
         "미션: 도깨비 질문에 선택지로 답 → 정답이면 AR 오브젝트 활성화.\n"
         '아래 JSON만: {{"question":"<장소 관련 질문>","options":["<선택1>","<선택2>","<선택3>","<선택4>"],'
-        '"answer":<정답 0-3 정수>,"find":"<찾을 오브젝트>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"answer":<정답 0-3 정수>,"wrong_hint":"<오답일 때 줄 힌트, 이 장소의 것으로. 정답 직접노출 금지>",'
+        '"find":"<찾을 오브젝트>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "FIND": _BASE + (
         "미션: AR 카메라로 떠다니는 오브젝트를 찾아 수집(특수 조건 포함).\n"
         '아래 JSON만: {{"object":"<떠다니는 오브젝트>","count":<3-5 정수>,'
-        '"special":"<특수 조건 1문장, 예: 천천히 돌려야 사라지지 않음>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"special":"<특수 조건 1문장, 예: 천천히 돌려야 사라지지 않음>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "QUIZ_FIND": _BASE + (
         "미션: 4지선다 퀴즈 정답 → 잠긴 곳 개봉 → 파편. 정답은 [장소 정보]에서 검증 가능해야 한다.\n"
         '아래 JSON만: {{"q":"<문제>","options":["<1>","<2>","<3>","<4>"],"answer":<0-3 정수>,'
-        '"wrong_hint":"<오답 힌트, 정답 직접노출 금지>","find":"<찾을 파편>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"wrong_hint":"<오답 힌트, 정답 직접노출 금지>","find":"<찾을 파편>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "HUNT": _BASE + (
         "미션: AR 카메라로 이 장소에 깃든 '망각귀'(잊혀진 기억이 뒤틀린 괴물)를 사냥. 마지막에 미니보스.\n"
         '아래 JSON만: {{"monster":"<이 장소 테마의 망각귀 이름>","count":<3-7 정수>,'
         '"boss":"<마지막 미니보스 이름>","weakness":"<약점/공략 1문장>","find":"<쓰러뜨린 뒤 주울 파편 이름>",'
-        '"order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "RESTORE_AR": _BASE + (
         "미션: 사라지거나 무너진 옛 건물/구조물을 AR로 복원. 흩어진 부재(주춧돌·기둥 등)를 제자리에 맞춘다.\n"
         '아래 JSON만: {{"structure":"<복원할 옛 건물/구조물>","parts":["<흩어진 부재1>","<부재2>","<부재3>"],'
-        '"era":"<시대>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"era":"<시대>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "PATH_TRACE": _BASE + (
         "미션: 먹물 발자국을 따라 주변 지점들을 순서대로 밟아 파편에 도달.\n"
         '아래 JSON만: {{"trail_object":"<따라갈 자취의 짧은 이름, 4~10자>",'
         '"trail_clue":"<발자국 묘사 1문장>","steps":["<거쳐갈 지점/단서1>","<지점2>","<지점3>"],'
         '"photo_targets":["<도중에 찍을 이 장소의 요소>","<..>"],'
-        '"find":"<도착지에서 찾을 것>","order":"<지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"find":"<도착지에서 찾을 것>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "DIALOGUE_COLLECT": _BASE + (
         "미션: 최종장. 망각귀의 비관 대사 + 수호 도깨비의 답 + 모은 조각을 순서대로 맞춰 복원하라는 지령.\n"
         '아래 JSON만: {{"villain_line":"<망각귀 비관 대사>","guardian_line":"<수호 도깨비의 답>",'
-        '"order":"<복원 지령 1줄>","hints":["<힌트1 넓게>","<힌트2 구체적>"]}}'
+        '"order":"<복원 지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
 }
 
@@ -163,6 +197,9 @@ async def generate_mission(name: str, overview: str, mtype: str, *, feedback: st
        재시도도, 사용자 고지도 불가능했다. 폴백은 generic_mission()으로 분리했다.
     """
     prompt = _PROMPTS.get(mtype, _PROMPTS["FIND"]).format(name=name, overview=(overview or "")[:1500])
+    if not (overview or "").strip():
+        # 이름만 아는 노드(detailCommon2 실패·합성 노드). 대사 경로(NO_SOURCE_RULE)와 짝.
+        prompt += f"{NO_SOURCE_MISSION_RULE}\n"
     if feedback:
         prompt += f"\n[재작성 지시] {feedback}\n같은 실수를 반복하지 말고 JSON만 다시 출력하라."
     try:
@@ -180,6 +217,34 @@ async def generate_mission(name: str, overview: str, mtype: str, *, feedback: st
 def generic_mission(name: str, mtype: str) -> dict:
     """생성 실패 시 제네릭 폴백 미션 — 기존 폴백 동작 그대로(항상 order+hints 보장)."""
     return _normalize(mtype, {}, name)
+
+
+# 앱이 서식 없는 Text로 그리는 값들 — 대사와 같은 필터를 통과시킨다. type은 식별자라 제외.
+_RAW_KEYS = {"type", "answer", "count"}
+
+
+# 모델이 단어를 식별자처럼 밑줄로 잇는다("망각귀_대마왕_조각"). 앱은 이 값을 문장으로
+# 그리므로 글자 사이 밑줄만 공백으로 되돌린다. ⚠️ 미션 텍스트 전용 — 대사에는 걸지 않는다
+# (내부 id는 애초에 humanize_ref가 사람 말로 바꾸고, 대사에 밑줄이 나올 일이 없다).
+_WORD_UNDERSCORE_RE = re.compile(r"(?<=[0-9A-Za-z가-힣])_(?=[0-9A-Za-z가-힣])")
+
+
+def _clean_mission_text(mission: dict) -> dict:
+    """미션의 화면 노출 문자열에서 마크업·연기 지문·메타 꼬리·밑줄 표기를 걷어낸다.
+
+    ⚠️ 걷어낸 결과가 비면 원문을 남긴다 — clean_line과 같은 계약(빈 값이 더 나쁘다).
+    """
+    def _one(text: str) -> str:
+        return clean_line(_WORD_UNDERSCORE_RE.sub(" ", text)) or text
+
+    for key, value in mission.items():
+        if key in _RAW_KEYS:
+            continue
+        if isinstance(value, str):
+            mission[key] = _one(value)
+        elif isinstance(value, list):
+            mission[key] = [_one(item) if isinstance(item, str) else item for item in value]
+    return mission
 
 
 def _json(raw: str) -> dict | None:
@@ -214,6 +279,7 @@ def _normalize(mtype: str, d: dict, name: str) -> dict:
         m["question"] = str(d.get("question") or f"{name}의 기억은 어디에 남아 있을까?")
         m["options"] = _strs(d.get("options"), ["오래된 골목", "닫힌 문 안쪽", "높은 담장", "사람들의 발길"])
         m["answer"] = _ans(d.get("answer"), m["options"])
+        m["wrong_hint"] = str(d.get("wrong_hint") or GENERIC_WRONG_HINT)
         m["find"] = str(d.get("find") or "기와 조각")
     elif mtype == "FIND":
         m["object"] = str(d.get("object") or "시간의 조각")
@@ -223,7 +289,7 @@ def _normalize(mtype: str, d: dict, name: str) -> dict:
         m["q"] = str(d.get("q") or f"{name}에 대한 설명으로 옳은 것은?")
         m["options"] = _strs(d.get("options"), ["보기1", "보기2", "보기3", "보기4"])
         m["answer"] = _ans(d.get("answer"), m["options"])
-        m["wrong_hint"] = str(d.get("wrong_hint") or "다시 살펴보거라.")
+        m["wrong_hint"] = str(d.get("wrong_hint") or GENERIC_QUIZ_WRONG_HINT)
         m["find"] = str(d.get("find") or "기억석 파편")
     elif mtype == "HUNT":
         m["monster"] = str(d.get("monster") or "망각귀")
@@ -244,7 +310,7 @@ def _normalize(mtype: str, d: dict, name: str) -> dict:
     elif mtype == "DIALOGUE_COLLECT":
         m["villain_line"] = str(d.get("villain_line") or "작은 것들은 곧 잊히는 법이지.")
         m["guardian_line"] = str(d.get("guardian_line") or "아니다. 기억은 누군가 다시 찾을 때 살아나느니라.")
-    return m
+    return _clean_mission_text(m)
 
 
 def _strs(v, fallback: list[str]) -> list[str]:
@@ -262,6 +328,8 @@ def to_quiz(mission: dict) -> dict | None:
         return {"q": mission["q"], "options": mission["options"], "answer": mission["answer"],
                 "wrong_hint": mission["wrong_hint"]}
     if mission.get("type") == "DIALOGUE_FIND":
+        # ⚠️ 고정 문구를 넣으면 그게 사다리 H3이 된다(build_hint_ladder) — 미션이 만든
+        #    장소별 오답 힌트를 쓰고, 없을 때만 범용 문구로 떨어뜨린다(v5).
         return {"q": mission["question"], "options": mission["options"], "answer": mission["answer"],
-                "wrong_hint": "다시 골라 보거라."}
+                "wrong_hint": str(mission.get("wrong_hint") or GENERIC_WRONG_HINT)}
     return None

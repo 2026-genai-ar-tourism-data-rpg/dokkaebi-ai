@@ -53,15 +53,26 @@
 #            ⚠️ 여기 재시도/재생성은 LLMClient의 429 백오프 재시도와 다른 층이다.
 # 구현일: 2026-09-04 | 작성: pjh (agent-qa/pjh/v1)
 # ------------------------------------------------------------
-# [v7] 코스 오프닝 프롤로그 생성 — region·첫 조각 장소 grounding(코스당 1회, with_dialogue와
-#      같이 켜고 끔). 실패해도 항상 폴백 대본을 반환하므로 시나리오 생성을 막지 않는다.
-# 구현일: 2026-09-04 | 작성: ljs (prologue-story-gen/ljs/v1)
+# [v7] 진행도·난이도가 일부 경로에만 먹던 것을 바로잡는다(점검 20260909-2).
+# 구현(요약): ① 샛길(b1) 노드가 진행도 없이 대사를 받아 코스 중반에 "이제 막 여정을
+#              시작한 참"으로 말했다 — 샛길은 본선 M을 **대체**하므로 M의 조각 번호가
+#              그 노드의 진행도다(link_state_graph의 승계 규칙과 같은 근거).
+#            ② QA 루프에 진행도를 넘긴다 — 대사를 다시 만들 때 최초 생성과 같은 입력을
+#              쓰게 한다(qa_graph v3).
+#            ③ 난이도별 힌트 수(계약: 3/2/1)가 실제로는 안 먹었다. apply_hint_limit이
+#              **미션 hints**만 잘랐는데 앱이 보는 건 hint_ladder(H1~H3 고정 3칸)라,
+#              hard가 "힌트를 1개로 줄이는" 대신 "H2를 범용 폴백으로 떨어뜨리는" 효과만
+#              냈다(실측: H2가 "지령이 이르는 …" 폴백으로 바뀜). 사다리를 **다 만든 뒤**
+#              노출 칸수를 자른다 — QA 재생성이 미션을 새로 만들어도 풀리지 않도록
+#              _run_qa_pass 뒤에 적용한다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 import asyncio
 import hashlib
 from app.config import get_settings
 from app.core.exceptions import DokkaebiAIError
 from app.core.logger import get_logger
+from app.core.wording import progress_state, stone_position
 from app.region.memory_cache import get_region_cache
 from app.scenario.density import density_label
 from app.scenario.node_content import (
@@ -71,7 +82,7 @@ from app.scenario.node_content import (
     to_quiz,
 )
 from app.scenario.preference import (
-    apply_hint_limit,
+    apply_ladder_limit,
     headcount_for,
     infer_region,
     node_count_for,
@@ -284,8 +295,9 @@ async def generate_basic_scenario(
         missions = await asyncio.gather(
             *[_content_for(n, m, mv, qa_flags) for n, m, mv in zip(route, metas, motivations_list)]
         )
-        # 난이도 → 노출 힌트 개수(쉬움 3 / 보통 2 / 어려움 1). 생성은 그대로 두고 노출만 줄인다.
-        missions = [apply_hint_limit(m, difficulty) for m in missions]
+        # ⚠️ 난이도 절단은 여기서 하지 않는다(v7). 미션 hints를 먼저 자르면 그걸 재료로
+        #    만드는 hint_ladder의 H2가 범용 폴백으로 떨어져, '힌트를 줄이는' 대신
+        #    '힌트 품질을 떨어뜨리는' 결과가 된다. 사다리를 다 만든 뒤 노출 칸을 자른다.
     else:
         missions = [None] * len(route)
     logger.info("거리순 시나리오: 후보 %d → 관광 %d조각 + 식음 %d (반경 %dm, 대사=%s, 미션=%s)",
@@ -320,6 +332,9 @@ async def generate_basic_scenario(
     #         link_state_graph 이전에 돈다(재생성 시 enrich_quest가 다시 컴파일되므로).
     node_sequence, loop_flags = await _run_qa_pass(node_sequence, sources)
     qa_flags.extend(loop_flags)
+    # 난이도 → 노출 힌트 칸수(쉬움 3 / 보통 2 / 어려움 1). 사다리가 완성된 뒤,
+    # QA 재생성까지 끝난 다음에 자른다 — 재생성이 미션을 새로 만들어도 난이도가 풀리지 않는다.
+    node_sequence = [apply_ladder_limit(q, difficulty) for q in node_sequence]
     node_sequence = link_state_graph(node_sequence)
     return {
         "scenario_id": _make_scenario_id(region, [q["node_id"] for q in node_sequence]),
@@ -358,8 +373,12 @@ async def _apply_branching(
         logger.info("route 분기 skip: 샛길 예비 후보 없음")
         return node_sequence, None
     # 샛길 노드 콘텐츠 — 본선 M과 동급의 관광 노드로 취급(등장 대사 + 미션 1개)
-    alt_meta = {"is_food": False, "is_finale": False, "stone_no": None,
-                "stone_index": max(0, bp_i), "stone_total": 0}
+    # 진행도는 **대체하는 본선 노드 M**의 것을 쓴다(attach_branch가 M을 substitutes로 박는다).
+    # 안 그러면 코스 중반 샛길에서 도깨비가 "이제 막 여정을 시작한 참"이라고 맞이한다(v7).
+    substituted = node_sequence[bp_i + 1] if bp_i + 1 < len(node_sequence) else {}
+    alt_stone_no, alt_stone_total = stone_position(substituted.get("fragment_id"))
+    alt_meta = {"is_food": False, "is_finale": False, "stone_no": alt_stone_no,
+                "stone_index": max(0, bp_i), "stone_total": alt_stone_total or 0}
     alt_src["overview"] = await _overview_for(alt_src) or ""
     get_region_cache().warm(region, {alt_src["node_id"]: alt_src["overview"]})
     if sources is not None:
@@ -367,7 +386,7 @@ async def _apply_branching(
     alt_dialogue = await _dialogue_for(alt_src, alt_meta) if with_dialogue else _fixed(alt_src, alt_meta)
     alt_motivations = await _motivations_for(alt_src, alt_meta)   # [v3] 동기 → 미션 타입 순서 유지
     alt_mission = await _content_for(alt_src, alt_meta, alt_motivations, flags) if with_content else None
-    alt_mission = apply_hint_limit(alt_mission, difficulty)     # 샛길도 같은 난이도 규칙
+    # 난이도 절단은 본선과 같은 자리(사다리 완성 후)에서 한 번에 한다 — v7.
     alt_quest = _build_branch_quest(alt_src, len(node_sequence), region, alt_dialogue,
                                     alt_mission, motivations=alt_motivations,
                                     trigger_radius_m=trigger_radius_m)
@@ -400,15 +419,24 @@ def _dialogue_player_state(meta: dict) -> dict:
     ⚠️ 예전에는 빈 dict를 넘겼다 — progress_line이 "이제 막 여정을 시작한 참이다"를
     돌려주는 바람에 피날레(stage=완료) 프롬프트까지 '방금 시작한 사람' 취급을 했고,
     마지막 노드 도깨비가 첫인사를 했다(실측 2026-09-09: 신석구 사택 터).
-    조각 N번째 노드에 도착했으면 이미 N-1개를 모은 상태다.
+    규칙 자체는 core.wording.progress_state에 있다 — QA 재생성 경로가 같은 규칙을
+    쓰게 하려고 옮겼다(한쪽만 채우면 그 경로만 진행도를 잃는다, v7).
     """
-    total = meta.get("stone_total") or 0
-    stone_no = meta.get("stone_no")
-    if meta.get("is_food") or not isinstance(stone_no, int) or stone_no <= 1:
-        # 식음은 조각 축에 없고, 첫 노드는 아직 모은 게 없다 — 둘 다 빈 dict가 맞다
-        # (progress_line이 "이제 막 여정을 시작한 참이다"로 풀어 준다).
-        return {}
-    return {"progress": stone_no - 1, "required": total}
+    return progress_state(meta.get("stone_no"), meta.get("stone_total") or 0,
+                          is_food=bool(meta.get("is_food")))
+
+
+def _quest_player_state(quest: dict, by_id: dict[str, dict]) -> dict:
+    """조립된 퀘스트에서 도착 시점 진행도를 되짚는다(QA 재생성이 쓰는 입력).
+
+    샛길(b1)은 본선 M을 대체하므로 M의 조각 번호를 그대로 쓴다 —
+    link_state_graph._inherit_substituted_state가 조각·단서를 승계시키는 것과 같은 근거.
+    """
+    origin = by_id.get(str(quest.get("substitutes") or "")) or quest
+    no, total = stone_position(origin.get("fragment_id"))
+    if no is None and isinstance(origin.get("stone_no"), int):
+        no, total = origin["stone_no"], total
+    return progress_state(no, total, is_food=_is_food(quest))
 
 
 async def _dialogue_for(node: dict, meta: dict) -> str:
@@ -499,8 +527,10 @@ async def _run_qa_pass(node_sequence: list[dict],
     식음 노드는 기억석 미션·조각이 없어 QA 대상이 아니다(기존 _run_qa_log와 같은 범위).
     """
     targets = [i for i, q in enumerate(node_sequence) if not _is_food(q)]
+    by_id = {str(q.get("node_id")): q for q in node_sequence}
     results = await asyncio.gather(
-        *[run_qa_loop(node_sequence[i], sources.get(node_sequence[i].get("node_id")) or {})
+        *[run_qa_loop(node_sequence[i], sources.get(node_sequence[i].get("node_id")) or {},
+                      _quest_player_state(node_sequence[i], by_id))
           for i in targets]
     )
     out = list(node_sequence)

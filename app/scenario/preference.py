@@ -8,6 +8,15 @@
 #            — 앱은 GPS 좌표만 알고 행정구역명을 모르기 때문(역지오코딩 미도입).
 #            모르는 값·미전송은 전부 기본값으로 떨어진다 → 기존 동작 그대로(하위호환).
 # 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
+# ------------------------------------------------------------
+# [v2] 난이도별 힌트 수가 앱까지 안 갔다 — 자르는 대상을 바꾼다(점검 20260909-2).
+# 구현(요약): apply_hint_limit은 **미션 hints**를 자른다. 그런데 앱이 그리는 것은
+#            hint_ladder(H1~H3)이고, 사다리는 그 hints를 재료로 만들어진다 —
+#            먼저 자르면 재료가 모자라 H2가 범용 폴백("지령이 이르는 …")으로 떨어지고,
+#            칸수는 여전히 3이다. 즉 hard가 '힌트를 줄이는' 대신 '힌트를 나쁘게 만드는'
+#            효과만 냈다(실측 20260909-2). 사다리를 다 만든 뒤 노출 칸을 자르는
+#            apply_ladder_limit을 쓴다. apply_hint_limit은 하위호환으로 남긴다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 from collections import Counter
 
@@ -95,7 +104,11 @@ def rank_by_tags(nodes: list[dict], tags: list[str] | None) -> list[dict]:
 
 
 def apply_hint_limit(mission: dict | None, difficulty: str | None) -> dict | None:
-    """미션 힌트를 난이도만큼만 남긴다. 힌트가 없으면 그대로."""
+    """(하위호환) 미션 힌트를 난이도만큼만 남긴다. 힌트가 없으면 그대로.
+
+    ⚠️ 생성 경로에서는 쓰지 않는다 — 사다리 재료를 먼저 자르면 H2가 폴백으로 떨어진다.
+    난이도 절단은 apply_ladder_limit(사다리 완성 후)이 담당한다(v2).
+    """
     if not mission:
         return mission
     hints = mission.get("hints") or []
@@ -156,3 +169,44 @@ def _virtual_dist(node: dict, keys: set[str]) -> float:
     dist = node.get("dist_m")
     base = float(dist) if dist is not None else 10_000_000.0
     return base - _TAG_BONUS_M * _tag_hits(node, keys)
+
+
+# 사다리 칸 이름 — 앱 HintLadder가 읽는 키. 순서가 곧 해금 순서다.
+_LADDER_RUNGS = ("H1", "H2", "H3")
+
+
+def apply_ladder_limit(quest: dict | None, difficulty: str | None) -> dict | None:
+    """조립이 끝난 퀘스트에서 **노출할 힌트 칸수**를 난이도만큼만 남긴다.
+
+    앱이 그리는 것은 hint_ladder다 — 난이도를 여기서 적용해야 계약(쉬움 3/보통 2/어려움 1)이
+    실제로 지켜진다. 사다리를 만들기 전에 미션 hints를 자르면 H2가 범용 폴백으로 떨어져
+    '힌트가 줄어드는' 대신 '힌트가 나빠지는' 결과가 된다(v2 사유).
+
+    - hint_ladder: 앞에서부터 n칸만 남기고 open_rule도 같은 길이로 맞춘다
+      (open_rule[i]가 i번째 칸의 해금 조건이라 남은 칸보다 길면 열 수 없는 조건이 남는다).
+    - objective.hints·mission.hints: 화면에 같이 노출되는 값이라 같은 수로 맞춘다.
+    빈 입력·힌트 없는 노드는 그대로 돌려준다(하위호환).
+    """
+    if not quest:
+        return quest
+    limit = hint_limit_for(difficulty)
+    out = dict(quest)
+
+    ladder = out.get("hint_ladder")
+    if isinstance(ladder, dict):
+        rungs = [key for key in _LADDER_RUNGS if key in ladder]
+        trimmed = {key: value for key, value in ladder.items() if key not in rungs}
+        for key in rungs[:limit]:
+            trimmed[key] = ladder[key]
+        open_rule = ladder.get("open_rule")
+        if isinstance(open_rule, list):
+            trimmed["open_rule"] = open_rule[: max(1, min(limit, len(rungs)))]
+        out["hint_ladder"] = trimmed
+
+    objective = out.get("objective")
+    if isinstance(objective, dict) and objective.get("hints"):
+        out["objective"] = {**objective, "hints": list(objective["hints"])[:limit]}
+    mission = out.get("mission")
+    if isinstance(mission, dict) and mission.get("hints"):
+        out["mission"] = {**mission, "hints": list(mission["hints"])[:limit]}
+    return out

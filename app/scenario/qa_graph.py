@@ -35,6 +35,17 @@
 #            · 대사 재생성 지시문에서 _FB_HALLUCINATION 삭제(결함 #1의 유출 경로 차단)
 #            · 판정은 버리지 않는다 — 경고 로그 + qa_flags '경고' 항목으로만 남긴다
 # 구현일: 2026-09-06 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v3] 대사 재생성이 생성 경로의 수정을 우회하던 것을 막는다(점검 20260909-2).
+# 구현(요약): regen_dialogue가 run_dialogue에 node_name·qa_feedback만 넘기고
+#            **npc와 진행도를 안 넘겼다**. 그래서 말투로 반려된 노드만:
+#            ① 앱 표시 NPC(synthesize_npc)가 아니라 LLM 합성 이름으로 되돌아가고
+#               (2026-09-09에 고친 '이름 두 계통' 결함이 이 경로로 재발)
+#            ② 피날레인데 "이제 막 여정을 시작한 참이다"를 받아, 같은 프롬프트 안에서
+#               "처음 만난 것처럼 굴지 않는다"와 정면으로 부딪혔다.
+#            재생성은 '같은 입력 + 반려 사유'여야 한다 — 입력을 빠뜨리면 그 자체가
+#            새 결함이다. 진행도는 generator가 알고 있으므로 run_qa_loop 인자로 받는다.
+# 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
 from typing import Any, TypedDict
 
@@ -66,6 +77,7 @@ class QAState(TypedDict, total=False):
 
     quest: dict           # 점검·보수 대상 퀘스트(enrich_quest를 거친 노드)
     source: dict          # grounding 원천 노드(overview·name) — run_qa의 근거
+    player_state: dict    # 그 노드 도착 시점의 진행도 — 최초 생성과 같은 입력으로 재생성한다
     qa: dict              # 직전 run_qa 결과(플래그 + unsupported_tokens)
     qa_feedback: str      # 실패 사유 → 다음 LLM 호출에 싣는 재작성 지시
     qa_retry_count: int   # 지금까지 수행한 재생성 횟수
@@ -141,11 +153,14 @@ async def regen_dialogue(state: QAState) -> dict:
     count = state.get("qa_retry_count", 0) + 1
     feedback = _dialogue_feedback(state.get("qa") or {})
     stage = "완료" if quest.get("is_finale") else "등장"
+    npc = quest.get("npc") if isinstance(quest.get("npc"), dict) else None
     try:
         # qa_feedback을 넘기면 대사 캐시를 우회한다 — 캐시를 타면 방금 반려한 대사가 돌아온다.
+        # ⚠️ npc·진행도는 최초 생성(_dialogue_for)과 **같은 값**을 넘겨야 한다. 빠뜨리면
+        #    이 경로만 다른 도깨비가, 다른 진행도로 말한다(v3에서 실제로 그랬다).
         text, _hit = await run_dialogue(
-            str(quest.get("node_id") or ""), stage, {},
-            node_name=str(quest.get("name") or ""), qa_feedback=feedback,
+            str(quest.get("node_id") or ""), stage, dict(state.get("player_state") or {}),
+            node_name=str(quest.get("name") or ""), qa_feedback=feedback, npc=npc,
         )
     except Exception as e:                # 재생성 실패는 루프를 깨지 않는다(다음 QA에서 flag)
         logger.warning("QA 대사 재생성 실패 %s: %s", quest.get("node_id"), e)
@@ -217,15 +232,20 @@ def build_qa_graph():
 _graph = build_qa_graph()
 
 
-async def run_qa_loop(quest: dict, source: dict) -> tuple[dict, list[str]]:
+async def run_qa_loop(quest: dict, source: dict,
+                      player_state: dict | None = None) -> tuple[dict, list[str]]:
     """[서비스] 퀘스트 1개에 A1 루프를 돌려 (보수된 퀘스트, 미해결 사유) 반환.
 
     통과하면 flags는 빈 리스트다. 실패해도 예외를 던지지 않는다 —
     시나리오 생성 자체를 죽이지 않고 사유만 남기는 것이 이 루프의 계약이다.
+
+    player_state: 그 노드 도착 시점의 진행도(generator가 안다). 대사를 다시 만들 때
+    최초 생성과 같은 입력을 쓰기 위한 값 — 안 주면 진행도 없이 재생성된다(v3 이전 동작).
     """
     state: QAState = {
         "quest": quest,
         "source": source or {},
+        "player_state": dict(player_state or {}),
         "qa_feedback": "",
         "qa_retry_count": 0,
         "qa_max_regen": max(0, get_settings().scenario_qa_max_regen),
