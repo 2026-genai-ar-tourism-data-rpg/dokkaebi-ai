@@ -20,6 +20,13 @@
 # [v5] 시나리오 응답에 prologue 추가 — 코스 오프닝 대본(화자 순서·연출 비트는 고정,
 #      대사만 region·첫 장소로 생성). default_factory=list라 기존 호출자 무영향.
 # 구현일: 2026-09-04 | 작성: ljs (prologue-story-gen/ljs/v1)
+# ------------------------------------------------------------
+# [v6] 검색 후보에 dist_m 추가 — 앱이 '탐색 반경 먼저' 순서를 지키려면 거리가 필요하다(QA1).
+# 구현(요약): 앱이 반경을 먼저 고르고 그 안에서 가고싶은 곳을 고르게 바뀌는데, 검색은
+#            키워드 전용이라 전국 아무 곳이나 잡혔다. lat/lng를 주면 거리를 채워 거리순으로
+#            주고, radius_m까지 주면 반경 밖은 빼고 준다(routes.search). 좌표 미전송이면
+#            dist_m=None으로 기존 동작 그대로(하위호환).
+# 구현일: 2026-09-12 | 작성: pjh (wish-dupe-search-radius/pjh/v1)
 # ============================================================
 from pydantic import BaseModel, Field
 
@@ -169,10 +176,17 @@ class SearchCandidate(BaseModel):
     addr: str | None = None
     lat: float | None = None
     lng: float | None = None
+    # 현재 위치에서의 직선거리(m). 요청에 lat·lng가 있을 때만 채워진다 — 앱이 "3km 이내"
+    # 같은 표시·정렬에 그대로 쓴다. 좌표를 안 보내면 None(기존 호출자 무영향).
+    dist_m: float | None = None
 
 
 class SearchResponse(BaseModel):
-    """관광지 이름 검색 결과(정확 일치 우선 정렬)."""
+    """관광지 이름 검색 결과.
+
+    좌표를 안 보내면 정확 일치 우선 정렬(기존), 보내면 거리순 정렬 + dist_m 채움.
+    radius_m까지 보내면 반경 밖 후보는 아예 빠진다(앱의 '반경 먼저' 순서 지원).
+    """
     candidates: list[SearchCandidate]
 
 

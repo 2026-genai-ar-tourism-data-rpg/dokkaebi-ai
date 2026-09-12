@@ -19,9 +19,20 @@ from app.scenario.route_builder import _select_count
 _FAR_X, _FAR_Y = 126.5311, 33.4996
 
 
+# 노드마다 위도를 0.01°(약 1.1km)씩 벌린다 — _select_count가 좌표 근접(100m 이내)을
+# 같은 장소로 보고 건너뛰므로(route_builder v4), 같은 좌표를 쓰면 서로를 지운다.
+_FIXTURE_LAT_STEP = 0.01
+_fixture_seq = iter(range(1000))
+
+
 def _n(nid: str, dist_m: float = 100.0) -> dict:
-    """_select_count는 node_id만 보고 선택하므로 좌표는 아무 값이나 채운 최소 픽스처."""
-    return {"node_id": nid, "map_x": 126.98, "map_y": 37.57, "dist_m": dist_m}
+    """서로 다른 지점에 놓인 최소 픽스처(선택은 node_id, 중복 판정은 좌표를 본다)."""
+    return {
+        "node_id": nid,
+        "map_x": 126.98,
+        "map_y": 37.57 + _FIXTURE_LAT_STEP * next(_fixture_seq),
+        "dist_m": dist_m,
+    }
 
 
 def test_select_count_preserves_anchors_beyond_count():
