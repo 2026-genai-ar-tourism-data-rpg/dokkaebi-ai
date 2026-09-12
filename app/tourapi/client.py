@@ -6,6 +6,7 @@
 # 구현일: 2026-06-18 | 작성: kys (scenario-mvp/kys/v1)
 # ============================================================
 import json
+import time
 import math
 
 from app.config import get_settings
@@ -51,13 +52,22 @@ class TourAPIClient:
             logger.info("TourAPI 키 없음 → OSM(Overpass) 실데이터 사용")
             return await osm.location_based(map_x, map_y, radius_m, rows=rows)
 
+        t0 = time.perf_counter()
         result = await request(self._base, "locationBasedList2", {
             "numOfRows": rows,
             "mapX": map_x, "mapY": map_y, "radius": radius_m,
             "contentTypeId": content_type_id,
             "arrange": "E",  # E=거리순. TourAPI가 거리순 정렬을 보장
         })
-        return self._to_nodes(result["items"])  # 이미 거리순
+        nodes = self._to_nodes(result["items"])  # 이미 거리순
+        logger.info(
+            "TourAPI 위치조회: (%.5f,%.5f) 반경%dm → %d건 (%.1fs)",
+            map_y, map_x, radius_m, len(nodes), time.perf_counter() - t0,
+        )
+        if not nodes:
+            # 반경 안에 관광지가 없다 = 시나리오 생성이 여기서 도메인 실패로 끝난다.
+            logger.warning("TourAPI 위치조회 0건 — 반경을 넓히지 않으면 코스를 못 만든다")
+        return nodes
 
     async def search_keyword(
         self, keyword: str, content_type_id: int = 12, top_n: int = 10,
@@ -71,7 +81,9 @@ class TourAPIClient:
         if not keyword:
             return []
         if not self._key:
+            logger.info("TourAPI 키 없음 → OSM 키워드 검색 '%s'", keyword)
             return await osm.search_keyword(keyword, top_n=top_n)
+        t0 = time.perf_counter()
         result = await request(self._base, "searchKeyword2", {
             "keyword": keyword, "contentTypeId": content_type_id, "numOfRows": top_n,
         })
@@ -87,6 +99,8 @@ class TourAPIClient:
             })
         # 정확 일치(이름 == 키워드)를 맨 앞으로 — 지역코드 필터는 신뢰도 낮아 미사용
         cands.sort(key=lambda c: (c["name"] or "") != keyword)
+        logger.info("TourAPI 키워드검색 '%s' → %d건 (%.1fs)",
+                    keyword, len(cands), time.perf_counter() - t0)
         return cands
 
     async def detail_common(self, content_id: str) -> dict | None:
@@ -101,13 +115,17 @@ class TourAPIClient:
         cache, ckey = get_cache(), f"tourdetail:{content_id}"
         cached = await cache.get(ckey)
         if cached is not None:
+            logger.debug("TourAPI 상세 캐시 HIT: %s", content_id)
             return json.loads(cached)
 
+        t0 = time.perf_counter()
         result = await request(self._base, "detailCommon2", {
             "contentId": content_id, "numOfRows": 1,
         })
         items = result["items"]
         if not items:
+            # overview가 없으면 그 노드는 근거 없이 대사를 쓰게 된다(context_load 경고로 이어짐).
+            logger.warning("TourAPI 상세 없음: content_id=%s", content_id)
             return None
         it = items[0]
         detail = {
@@ -116,6 +134,8 @@ class TourAPIClient:
             "tel": it.get("tel"),
         }
         await cache.set(ckey, json.dumps(detail, ensure_ascii=False), get_settings().tourapi_cache_ttl_s)
+        logger.debug("TourAPI 상세 조회: %s overview=%d자 (%.1fs)",
+                     content_id, len((detail.get("overview") or "")), time.perf_counter() - t0)
         return detail
 
     def _to_nodes(self, items: list[dict]) -> list[dict]:

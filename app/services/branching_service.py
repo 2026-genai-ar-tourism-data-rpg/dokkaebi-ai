@@ -151,6 +151,11 @@ async def run_branching(
     # 식음이 아니어도 원문에 술이 적혀 있으면 모델이 그대로 권한다(원문 복창) — v4.
     alcohol_rule = "" if is_food else (f"\n{NO_ALCOHOL_RULE}" if alcohol_in_source(ctx) else "")
     terminal_ids = {c["id"] for c in terminal}
+    if not grounded:
+        # 이름만 아는 노드 — 환각 제동을 걸긴 하지만, 대사 품질이 떨어지는 지점이라 남긴다.
+        logger.warning(
+            "분기대화 근거 부족: node=%s(%s) — 장소 원문 없이 생성", node_id, node_name or "이름없음",
+        )
 
     chose_terminal = last_choice in terminal_ids
     depth_reached = turn >= s.max_dialogue_turns
@@ -196,10 +201,16 @@ async def run_branching(
         line = _line_only(await _llm.generate(prompt))
         if done:
             # grants는 비움 — 조각은 AR 탐색(앱)에서 획득. done=대화 종료→탐색으로.
-            logger.info("분기 대화 종료: node=%s 선택=%s", node_id, last_choice)
+            logger.info(
+                "분기 대화 종료: node=%s 선택=%s 조각=%s kind=%s",
+                node_id, last_choice, fragment_id or "없음", kind,
+            )
             return {"response": line, "choices": [], "grants": [], "done": True}
         # 갈림길 · 깊이상한 → 잡담은 끝내고 길 선택만 남긴다(아직 done 아님).
-        logger.info("갈림길 선택 대기: node=%s 갈래=%s", node_id, sorted(terminal_ids))
+        logger.info(
+            "갈림길 선택 대기: node=%s 갈래=%s (턴 %d/%d)",
+            node_id, sorted(terminal_ids), turn, s.max_dialogue_turns,
+        )
         return {"response": line, "choices": terminal, "grants": [], "done": False}
 
     prompt = (
@@ -221,8 +232,18 @@ async def run_branching(
     )
     raw = await _llm.generate(prompt)
     line, choices = _parse(raw)
+    if not choices:
+        # JSON 파싱 실패 = 앱에 선택지가 안 뜨고 대화가 막힌다. 원문을 남겨야 프롬프트를 고친다.
+        logger.warning(
+            "선택지 파싱 실패: node=%s turn=%d — LLM 원문 %d자: %s",
+            node_id, turn, len(raw), raw[:120].replace("\n", " "),
+        )
     objs = [{"id": f"c{i}", "text": t} for i, t in enumerate(choices[:2])]
     objs.extend(terminal)          # 갈림길이면 길 고르기, 아니면 의뢰 수령
+    logger.info(
+        "분기 대화 진행: node=%s turn=%d 대사%d자 선택지%d개",
+        node_id, turn, len(line), len(objs),
+    )
     return {"response": line, "choices": objs, "grants": [], "done": False}
 
 

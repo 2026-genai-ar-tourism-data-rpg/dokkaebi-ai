@@ -67,6 +67,7 @@
 #              _run_qa_pass 뒤에 적용한다.
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
 # ============================================================
+import time
 import asyncio
 import hashlib
 from app.config import get_settings
@@ -154,6 +155,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
     """
     # 종로 정답지 고정 재생 — 시연용 명시 요청에 한정(기본은 동적 생성)
     if req.use_fixed_script and req.region == "종로":
+        logger.info("종로 정답지 고정 재생(시연 모드) — 사용자 입력 커스터마이징은 무시된다")
         from app.scenario.jongno_script import generate_jongno_script
         scn = generate_jongno_script(region="종로")
         scn["created_by"] = req.user_id
@@ -170,6 +172,13 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
     radius = base_radius if req.radius_m else radius_for(req.duration, base_radius)
     headcount = headcount_for(req.companion, req.headcount)
     end = req.end or req.start
+    logger.info(
+        "시나리오 생성 시작: 반경 %dm(요청=%s) 노드 %d개 인원 %d명 이동=%s 난이도=%s",
+        radius, f"{req.radius_m}m" if req.radius_m else "자동",
+        node_count_for(req.duration, s.scenario_node_count), headcount,
+        req.transport, req.difficulty,
+    )
+    t0 = time.perf_counter()
     scn = await generate_basic_scenario(
         req.start.lng, req.start.lat, region=req.region, radius_m=radius,
         count=node_count_for(req.duration, s.scenario_node_count),
@@ -185,6 +194,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
     scn["headcount"] = headcount
     scn["transport"] = req.transport
     scn = _with_input_meta(scn, req)
+    logger.info("시나리오 조립 완료: %s (%.1fs)", scn.get("scenario_id"), time.perf_counter() - t0)
     # wishlist 앵커 강제포함은 route_builder.build_route(① 단계, 정찬희)가 처리. 여기선 메타만.
     if req.wishlist:
         scn["wishlist_content_ids"] = [w.content_id for w in req.wishlist]

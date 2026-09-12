@@ -19,8 +19,15 @@
 #              (scenario.module.ts:150은 keyword만 받고 ai.client.ts:113이 top_n=8 고정).
 #              통과 전에도 top_n 기본값 상향은 서버 수정 없이 바로 효과가 있다.
 # 구현일: 2026-09-12 | 작성: pjh (wish-dupe-search-radius/pjh/v1)
+# ------------------------------------------------------------
+# [v5] 운영 로그 — 엔드포인트마다 유저 바인딩 + 입력 요약/결과 요약.
+# 구현(요약): 실기기 테스트 중 로그만 보고 "누가 무엇을 요청해 무엇이 나왔나"를
+#            좇을 수 있게 한다. 본문의 user_id를 컨텍스트에 심으면 그 요청에서
+#            파생되는 모든 하위 로그(LLM·TourAPI·시나리오)에 자동으로 붙는다.
+# 구현일: 2026-09-12 | 작성: kys (ops-logging/kys/v1)
 # ============================================================
 import asyncio
+import time
 
 from fastapi import APIRouter
 
@@ -38,6 +45,7 @@ from app.api.schemas import (
 )
 from app.config import get_settings
 from app.core.logger import get_logger
+from app.core.reqctx import bind_user
 from app.scenario.generator import generate_scenario
 from app.scenario.request import LatLng, ScenarioRequest, WishItem
 from app.services.branching_service import run_branching
@@ -53,13 +61,28 @@ _tour = TourAPIClient()
 @router.post("/dialogue", response_model=DialogueResponse)
 async def dialogue(req: DialogueRequest) -> DialogueResponse:
     """[엔드포인트] NPC 대화 생성 — 게임 서버 내부 호출용."""
+    bind_user(req.user_id, req.user_name)
+    logger.info("대화 요청: node=%s(%s) stage=%s", req.node_id, req.node_name or "이름없음", req.stage)
+    t0 = time.perf_counter()
     text, hit = await run_dialogue(req.node_id, req.stage, req.player_state, node_name=req.node_name)
+    logger.info(
+        "대화 응답: %s %d자 (%.0fms) — %s",
+        "캐시" if hit else "생성", len(text), (time.perf_counter() - t0) * 1000,
+        (text[:40] + "…") if len(text) > 40 else text,
+    )
     return DialogueResponse(response=text, cache_hit=hit)
 
 
 @router.post("/dialogue/turn", response_model=DialogueTurnResponse)
 async def dialogue_turn(req: DialogueTurnRequest) -> DialogueTurnResponse:
     """[엔드포인트] 분기 대화 한 턴 — 대사+선택지(또는 조각 획득). 선택마다 호출."""
+    bind_user(req.user_id, req.user_name)
+    logger.info(
+        "분기대화 요청: node=%s(%s) turn=%d 직전선택=%s kind=%s 인벤=%d",
+        req.node_id, req.node_name or "이름없음", req.turn,
+        req.last_choice or "없음", req.kind, len(req.inventory.get("items", []) or []),
+    )
+    t0 = time.perf_counter()
     out = await run_branching(
         node_id=req.node_id, node_name=req.node_name, region_id=req.region_id,
         history=req.history, inventory=req.inventory, last_choice=req.last_choice,
@@ -67,12 +90,28 @@ async def dialogue_turn(req: DialogueTurnRequest) -> DialogueTurnResponse:
         kind=req.kind,
         branch=req.branch.model_dump() if req.branch else None,
     )
+    logger.info(
+        "분기대화 응답: 선택지%d개 획득=%s 종료=%s (%.0fms)",
+        len(out.get("choices", []) or []), out.get("grants") or "없음",
+        out.get("done"), (time.perf_counter() - t0) * 1000,
+    )
     return DialogueTurnResponse(**out)
 
 
 @router.post("/scenarios", response_model=ScenarioGenResponse)
 async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
     """[엔드포인트] 시나리오 생성 — 게임 서버가 앱 입력을 전달해 호출."""
+    bind_user(req.user_id)
+    logger.info(
+        "시나리오 요청: 시작=(%.5f,%.5f) 반경=%s 지역=%s %s/%s/%s 예산=%s원/%d인 "
+        "위시%d개 태그=%s 대사=%s 분기=%s",
+        req.start.lat, req.start.lng, req.radius_m or "기본", req.region,
+        req.duration, req.companion, req.difficulty,
+        req.budget if req.budget is not None else "없음", req.headcount,
+        len(req.wishlist), ",".join(req.tags) or "없음",
+        req.with_dialogue, req.with_branching,
+    )
+    t0 = time.perf_counter()
     sreq = ScenarioRequest(
         user_id=req.user_id,
         start=LatLng(lat=req.start.lat, lng=req.start.lng),
@@ -94,6 +133,18 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         with_branching=req.with_branching,
     )
     scn = await generate_scenario(sreq)
+    nodes = scn.get("node_sequence") or []
+    kinds: dict[str, int] = {}
+    for n in nodes:
+        kinds[n.get("kind", "?")] = kinds.get(n.get("kind", "?"), 0) + 1
+    # 가격대가 붙은 식음 노드 수 — 구글키가 죽으면 여기가 0이 된다(예외는 안 난다).
+    priced = sum(1 for n in nodes if n.get("price_band") or n.get("price_band_label"))
+    logger.info(
+        "시나리오 완료: id=%s 지역=%s 노드%d개 %s 조각=%s 가격대=%d곳 분기=%s (%.1fs)",
+        scn.get("scenario_id"), scn.get("region"), len(nodes),
+        kinds, scn.get("stone_total"), priced, bool(scn.get("is_branching")),
+        time.perf_counter() - t0,
+    )
     return ScenarioGenResponse(**scn)
 
 
@@ -115,6 +166,12 @@ async def search(
     관련도 순위에서 밀려 앱 필터에 아예 안 잡힌다.
     """
     limit = top_n or get_settings().scenario_search_top_n
+    logger.info(
+        "장소검색: '%s' top_n=%d 기준=%s 반경=%s",
+        keyword, limit,
+        f"({lat:.5f},{lng:.5f})" if lat is not None and lng is not None else "없음",
+        f"{radius_m}m" if radius_m else "무제한",
+    )
     cands = await _tour.search_keyword(keyword, content_type_id, limit)
     items = [
         SearchCandidate(
@@ -125,6 +182,7 @@ async def search(
         for c in cands
     ]
     if lat is None or lng is None:
+        logger.info("장소검색 결과: %d건 (거리정렬 없음 — 좌표 미제공)", len(items))
         return SearchResponse(candidates=items)
 
     if radius_m is not None:
@@ -136,6 +194,12 @@ async def search(
                 keyword, len(items), radius_m, len(inside), limit,
             )
         items = inside
+    if not items:
+        # 앱에서 "검색해도 아무것도 안 나온다"의 원인 1순위 — 반경이 좁거나 top_n에 밀린 것.
+        logger.warning("장소검색 결과 0건: '%s' 반경=%s top_n=%d", keyword, radius_m, limit)
+    else:
+        logger.info("장소검색 결과: %d건 (최근접 %.0fm)", len(items),
+                    min(c.dist_m for c in items if c.dist_m is not None))
     # 좌표 결측 후보는 거리를 알 수 없어 맨 뒤로(기존 거리순 정렬 특성과 동일)
     return SearchResponse(candidates=sorted(
         items, key=lambda c: c.dist_m if c.dist_m is not None else float("inf"),
@@ -169,11 +233,16 @@ async def nearby(lat: float, lng: float, radius_m: int = 2000, top_n: int = 20) 
     설명(summary)은 detailCommon2 캐시를 재사용(_overview_for와 동일 패턴) — 병렬 호출,
     캐시 히트면 TourAPI 재호출 없음.
     """
+    logger.info("주변탐색: (%.5f,%.5f) 반경=%dm top_n=%d", lat, lng, radius_m, top_n)
     nodes = await _tour.location_based_list(lng, lat, radius_m)
+    if not nodes:
+        logger.warning("주변탐색 결과 0건: (%.5f,%.5f) 반경=%dm", lat, lng, radius_m)
     nodes = nodes[:top_n]
     details = await asyncio.gather(
         *[_tour.detail_common(n.get("tour_content_id")) for n in nodes]
     )
+    logger.info("주변탐색 결과: %d곳 (설명 %d곳)", len(nodes),
+                sum(1 for d in details if (d or {}).get("overview")))
     return NearbyResponse(places=[
         NearbyPlace(
             node_id=str(n.get("node_id")), name=n.get("name"),

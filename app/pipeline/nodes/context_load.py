@@ -3,9 +3,17 @@
 # pipeline: AI 백엔드 / 오케스트레이션 그래프 (cache miss 후)
 # 구현(요약): 지역 인메모리 캐시에서 node 텍스트 조회 → context 주입. RAG는 기본 off
 # 구현일: 2026-06-10 | 작성: kys (base-pipeline/kys/v1)
+# ------------------------------------------------------------
+# [v2] 운영 로그 — grounding 텍스트를 못 구한 경우를 드러낸다.
+# 구현(요약): 텍스트가 비면 모델이 장소를 모른 채 대사를 쓴다(환각의 출발점).
+#            예외는 안 나므로 로그가 없으면 앱 대사를 읽고서야 눈치챈다.
+# 구현일: 2026-09-12 | 작성: kys (ops-logging/kys/v1)
 # ============================================================
+from app.core.logger import get_logger
 from app.pipeline.state import DialogueState
 from app.region.memory_cache import get_region_cache
+
+logger = get_logger(__name__)
 
 
 async def context_load(state: DialogueState) -> dict:
@@ -18,5 +26,12 @@ async def context_load(state: DialogueState) -> dict:
     cache = get_region_cache()
     # 미스 시 cache가 TourAPI 재조회까지 시도. region_id를 주면 그 지역 워킹셋에 편입된다.
     text = await cache.get_text(node_id, region_id=state.get("region_id", ""))
+    if text:
+        logger.info("grounding 확보: node=%s %d자", node_id, len(text))
+    else:
+        logger.warning(
+            "grounding 없음: node=%s (지역=%s) — 모델이 장소를 모른 채 대사를 쓴다",
+            node_id, state.get("region_id") or "미지정",
+        )
     # TODO(박준형): 텍스트가 컨텍스트 한도 초과/교차검색 필요 시 use_rag=True 로 분기
     return {"context": text or "", "use_rag": False}

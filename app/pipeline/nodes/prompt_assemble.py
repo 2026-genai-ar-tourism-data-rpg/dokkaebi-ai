@@ -40,6 +40,7 @@ from app.core.wording import (
     alcohol_in_source,
     progress_line,
 )
+from app.core.logger import get_logger
 from app.pipeline.state import DialogueState
 
 # 단계별 '무엇을 말할 차례인가'. stage는 generator가 정한다(등장/완료/식음) —
@@ -60,6 +61,8 @@ _FOOD_RULE = (
     "기억석·조각·의뢰 이야기는 꺼내지 않는다. 여정 중에 한 술 뜨고 가라고 권하는 말만 한다."
 )
 
+
+logger = get_logger(__name__)
 
 async def prompt_assemble(state: DialogueState) -> dict:
     """[노드] persona·context(또는 RAG 청크)·stage를 합쳐 최종 프롬프트 생성.
@@ -125,4 +128,10 @@ async def prompt_assemble(state: DialogueState) -> dict:
             f"\n\n[재작성 지시]\n{state['qa_feedback']}\n"
             f"위 지적을 반드시 반영해 대사를 다시 쓴다."
         )
+    logger.info(
+        "프롬프트 조립: %s/%s %d자 (근거 %d자%s, 규칙 %d개%s)",
+        place_name, stage, len(prompt), len(grounding),
+        "" if grounding.strip() else " ←없음", len(rules),
+        ", 재작성" if state.get("qa_feedback") else "",
+    )
     return {"prompt": prompt}

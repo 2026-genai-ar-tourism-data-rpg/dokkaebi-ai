@@ -13,7 +13,14 @@
 # ------------------------------------------------------------
 # [v3] npc(앱 표시 정체성)를 그래프로 넘긴다 — 대사/앱 이름 불일치 차단(persona_inject v3).
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v4] 운영 로그 — 그래프 진입/종료와 캐시 여부를 남긴다.
+# 구현(요약): 이 파일에 로그가 0줄이라 대사가 캐시에서 온 건지 LLM이 만든 건지,
+#            자유 발화가 프롬프트에 실렸는지를 로그로 확인할 수 없었다.
+# 구현일: 2026-09-12 | 작성: kys (ops-logging/kys/v1)
 # ============================================================
+import time
+
 from app.core.logger import get_logger
 from app.pipeline.graph import build_graph
 from app.pipeline.state import DialogueState
@@ -58,5 +65,22 @@ async def run_dialogue(
         "qa_feedback": qa_feedback,
         "npc": npc or {},
     }
+    utterance = state["query"]
+    logger.info(
+        "대화그래프 시작: node=%s stage=%s 발화=%s%s",
+        node_id, stage,
+        f"'{utterance[:30]}'" if utterance else "없음",
+        " (QA재작성)" if qa_feedback else "",
+    )
+    t0 = time.perf_counter()
     result = await _graph.ainvoke(state)
-    return result.get("response", ""), result.get("cache_hit", False)
+    text = result.get("response", "")
+    hit = result.get("cache_hit", False)
+    if not text:
+        # 빈 대사는 앱에서 말풍선이 비어 보이는 결함으로 이어진다 — 조용히 넘기지 않는다.
+        logger.warning("대화그래프 결과가 빈 문자열: node=%s stage=%s", node_id, stage)
+    logger.info(
+        "대화그래프 종료: %s %d자 (%.0fms)",
+        "캐시히트" if hit else "LLM생성", len(text), (time.perf_counter() - t0) * 1000,
+    )
+    return text, hit

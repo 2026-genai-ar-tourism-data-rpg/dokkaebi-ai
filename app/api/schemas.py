@@ -34,6 +34,8 @@ from pydantic import BaseModel, Field
 class DialogueRequest(BaseModel):
     """NPC 대화 요청 — 게임 서버(dokkaebi-server)가 내부 HTTP로 호출."""
 
+    user_id: str | None = Field(None, description="운영 로그 상관관계용(선택) — 서버가 보내면 로그에 유저가 찍힌다")
+    user_name: str | None = Field(None, description="운영 로그 표시용 닉네임(선택)")
     node_id: str = Field(..., description="장소 노드 ID")
     node_name: str = Field("", description="장소 표시명 — 페르소나 합성 입력(8-B)")
     stage: str = Field("등장", description="등장|의뢰|힌트|완료")
@@ -66,6 +68,8 @@ class BranchSchema(BaseModel):
 
 class DialogueTurnRequest(BaseModel):
     """분기 대화 한 턴 — 선택마다 호출(멀티턴). 인벤토리로 연계(7-C)."""
+    user_id: str | None = None                           # 운영 로그 상관관계용(선택)
+    user_name: str | None = None                         # 운영 로그 표시용 닉네임(선택)
     node_id: str
     node_name: str = ""
     region_id: str = ""                                  # grounding 재조회 시 지역 워킹셋 편입에 사용

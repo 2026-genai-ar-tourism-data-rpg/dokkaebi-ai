@@ -13,9 +13,16 @@
 #            429가 나도 원인이 설정값에서 안 보였다. 핫패스는 전부 get_llm()을 쓴다.
 #            테스트용 provider 주입은 그대로 LLMClient(provider=...)로 가능.
 # 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
+# ------------------------------------------------------------
+# [v3] 운영 로그 — 호출 지연·실패·대기를 남긴다.
+# 구현(요약): 기존 로그는 429 재시도 2줄뿐이라 "응답이 왜 느리지"에 답할 수 없었다.
+#            건별은 DEBUG(시나리오 1건에 수십 콜이라 INFO면 화면이 덮인다),
+#            느린 호출·실패·병렬 묶음 요약은 INFO/WARNING으로 올린다.
+# 구현일: 2026-09-12 | 작성: kys (ops-logging/kys/v1)
 # ============================================================
 import asyncio
 import random
+import time
 
 from app.config import get_settings
 from app.core.exceptions import LLMCallError, LLMRateLimitError
@@ -25,6 +32,9 @@ from app.llm.providers.mock import MockProvider
 from app.llm.providers.openai_compatible import OpenAICompatibleProvider
 
 logger = get_logger(__name__)
+
+# 이보다 오래 걸린 단일 호출은 INFO로 올린다 — 전체 응답 지연의 범인을 바로 찾으려고.
+_SLOW_CALL_S = 5.0
 
 
 def _build_provider(name: str) -> LLMProvider:
@@ -62,18 +72,47 @@ class LLMClient:
         s = get_settings()
         self._provider = provider or _build_provider(s.llm_provider)
         self._sem = asyncio.Semaphore(s.llm_semaphore)  # 동시 호출 상한
+        self._sem_limit = s.llm_semaphore               # 로그 표시용(내부 _value 접근 금지)
         self._max_retries = s.llm_max_retries
         self._backoff_base = s.llm_backoff_base
         self._backoff_max = s.llm_backoff_max
 
     async def generate(self, prompt: str, **kwargs) -> str:
         """단일 LLM 호출 — 세마포어 획득 후 429 백오프 재시도 래핑."""
+        queued = time.perf_counter()
         async with self._sem:
-            return await self._call_with_retry(prompt, **kwargs)
+            waited = time.perf_counter() - queued
+            if waited > 1.0:
+                # 세마포어 대기가 길면 동시성 상한이 병목 — config.llm_semaphore를 봐야 한다.
+                logger.info("LLM 세마포어 대기 %.1fs (상한 %d)", waited, self._sem_limit)
+            t0 = time.perf_counter()
+            try:
+                out = await self._call_with_retry(prompt, **kwargs)
+            except Exception as e:
+                logger.error(
+                    "LLM 호출 실패 (%.1fs, 프롬프트 %d자): %s",
+                    time.perf_counter() - t0, len(prompt), e,
+                )
+                raise
+            took = time.perf_counter() - t0
+            if took >= _SLOW_CALL_S:
+                logger.info("LLM 느린 응답 %.1fs (프롬프트 %d자 → %d자)", took, len(prompt), len(out))
+            else:
+                logger.debug("LLM %.2fs (프롬프트 %d자 → %d자)", took, len(prompt), len(out))
+            return out
 
     async def generate_many(self, prompts: list[str], **kwargs) -> list[str]:
         """여러 프롬프트 병렬 호출. 각 호출이 세마포어를 공유해 동시성 제한됨."""
-        return await asyncio.gather(*[self.generate(p, **kwargs) for p in prompts])
+        if not prompts:
+            return []
+        t0 = time.perf_counter()
+        outs = await asyncio.gather(*[self.generate(p, **kwargs) for p in prompts])
+        logger.info(
+            "LLM 병렬 %d건 완료 (%.1fs, 평균 %d자)",
+            len(prompts), time.perf_counter() - t0,
+            sum(len(o) for o in outs) // max(1, len(outs)),
+        )
+        return outs
 
     async def _call_with_retry(self, prompt: str, **kwargs) -> str:
         """429(LLMRateLimitError) 발생 시 지수 백오프(+jitter) 재시도. 소진 시 LLMCallError."""
