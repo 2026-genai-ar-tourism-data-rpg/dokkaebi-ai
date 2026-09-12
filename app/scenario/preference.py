@@ -31,10 +31,11 @@ _DURATION_RADIUS_SCALE = {"2h": 1.0, "half": 1.5, "full": 2.0}
 
 # --- difficulty: 앱 「난이도」 선택 → GPS 트리거 반경 · 힌트 노출 수 ---
 # 쉬움일수록 반경을 넓게(도착 인증이 쉬움) 힌트를 많이. 어려움은 그 반대.
-# TODO(임시): 실기기 들고 실제 이동하며 도착 인증 테스트하려고 전부 10m로 임시 축소
-#             (이전엔 이동 없이 테스트하려고 10km로 늘려뒀던 것). 테스트 끝나면 원래 값
-#             ({"easy": 150, "normal": 100, "hard": 60})으로 되돌릴 것.
-_DIFFICULTY_TRIGGER_M = {"easy": 10, "normal": 10, "hard": 10}
+# TODO(임시): 실기기 들고 실제 이동하며 도착 인증 테스트 중이라 난이도 구분 없이 50m.
+#             10m(PR #62)는 GPS 오차(통상 5~20m)보다 작아 제자리에서도 인증이 실패했다.
+#             테스트 끝나면 원래 값({"easy": 150, "normal": 100, "hard": 60})으로 되돌릴 것.
+#             ⚠️ 근접 중복 제거 임계값은 이 값과 분리돼 있다(config.scenario_dupe_merge_m).
+_DIFFICULTY_TRIGGER_M = {"easy": 50, "normal": 50, "hard": 50}
 _DIFFICULTY_HINTS = {"easy": 3, "normal": 2, "hard": 1}
 
 # --- companion: 앱 「동행」 선택 → 인원수(1인 예산 = budget/headcount) ---

@@ -9,6 +9,16 @@
 # ------------------------------------------------------------
 # [v3] 앱 마법사 입력(duration·companion·difficulty·tags·use_fixed_script) 전달.
 # 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
+# ------------------------------------------------------------
+# [v4] /v1/search에 좌표·반경을 연다 — 앱 '탐색 반경 먼저' 순서 지원(QA1 선택안).
+# 구현(요약): 검색이 키워드 전용이라 반경을 먼저 골라도 전국 아무 곳이나 선택됐다.
+#            lat·lng를 주면 dist_m을 채워 거리순으로, radius_m까지 주면 반경 밖을 빼고
+#            돌려준다. 더불어 기본 후보 수를 8 → config.scenario_search_top_n(30)으로
+#            올린다 — 8건이면 반경 안 장소가 관련도 순위에서 밀려 앱 필터에 아예 안 잡힌다.
+#            ⚠️ 서버(dokkaebi-server)가 이 쿼리를 통과시켜야 앱까지 닿는다
+#              (scenario.module.ts:150은 keyword만 받고 ai.client.ts:113이 top_n=8 고정).
+#              통과 전에도 top_n 기본값 상향은 서버 수정 없이 바로 효과가 있다.
+# 구현일: 2026-09-12 | 작성: pjh (wish-dupe-search-radius/pjh/v1)
 # ============================================================
 import asyncio
 
@@ -26,14 +36,17 @@ from app.api.schemas import (
     SearchCandidate,
     SearchResponse,
 )
+from app.config import get_settings
+from app.core.logger import get_logger
 from app.scenario.generator import generate_scenario
 from app.scenario.request import LatLng, ScenarioRequest, WishItem
 from app.services.branching_service import run_branching
 from app.services.dialogue_service import run_dialogue
-from app.tourapi.client import TourAPIClient
+from app.tourapi.client import TourAPIClient, haversine_m
 
 router = APIRouter(prefix="/v1", tags=["ai"])
 
+logger = get_logger(__name__)
 _tour = TourAPIClient()
 
 
@@ -85,16 +98,56 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
 
 
 @router.get("/search", response_model=SearchResponse)
-async def search(keyword: str, content_type_id: int = 12, top_n: int = 8) -> SearchResponse:
-    """[엔드포인트] 관광지 이름 검색 — 앵커 자동완성(부분일치, 정확 title 우선)."""
-    cands = await _tour.search_keyword(keyword, content_type_id, top_n)
-    return SearchResponse(candidates=[
+async def search(
+    keyword: str,
+    content_type_id: int = 12,
+    top_n: int | None = None,
+    lat: float | None = None,
+    lng: float | None = None,
+    radius_m: int | None = None,
+) -> SearchResponse:
+    """[엔드포인트] 관광지 이름 검색 — 앵커 자동완성(부분일치, 정확 title 우선).
+
+    lat·lng를 주면 그 지점 기준 dist_m을 채워 **거리순**으로 돌려준다.
+    radius_m까지 주면 반경 밖 후보는 뺀다 — 앱이 '탐색 반경 먼저' 순서를 지키려면
+    검색 자체가 반경을 알아야 하기 때문(QA1).
+    top_n 미지정 시 config.scenario_search_top_n을 쓴다 — 8건이면 반경 안 장소가
+    관련도 순위에서 밀려 앱 필터에 아예 안 잡힌다.
+    """
+    limit = top_n or get_settings().scenario_search_top_n
+    cands = await _tour.search_keyword(keyword, content_type_id, limit)
+    items = [
         SearchCandidate(
             content_id=str(c["tour_content_id"]), name=c.get("name"),
             addr=c.get("addr"), lat=c.get("map_y"), lng=c.get("map_x"),
+            dist_m=_dist_from(lat, lng, c.get("map_y"), c.get("map_x")),
         )
         for c in cands
-    ])
+    ]
+    if lat is None or lng is None:
+        return SearchResponse(candidates=items)
+
+    if radius_m is not None:
+        inside = [c for c in items if c.dist_m is not None and c.dist_m <= radius_m]
+        if len(inside) < len(items):
+            # 앱이 "반경 안인데 결과에 없다"를 판단할 근거 — top_n 상한에 걸린 경우를 가린다.
+            logger.info(
+                "검색 '%s': 후보 %d개 중 반경 %dm 안 %d개(top_n=%d)",
+                keyword, len(items), radius_m, len(inside), limit,
+            )
+        items = inside
+    # 좌표 결측 후보는 거리를 알 수 없어 맨 뒤로(기존 거리순 정렬 특성과 동일)
+    return SearchResponse(candidates=sorted(
+        items, key=lambda c: c.dist_m if c.dist_m is not None else float("inf"),
+    ))
+
+
+def _dist_from(lat: float | None, lng: float | None,
+               node_lat: float | None, node_lng: float | None) -> float | None:
+    """현재 위치와 후보 좌표의 직선거리(m). 어느 한쪽이라도 없으면 None."""
+    if None in (lat, lng, node_lat, node_lng):
+        return None
+    return round(haversine_m(lat, lng, node_lat, node_lng), 1)
 
 
 def _one_line_summary(overview: str | None, max_len: int = 60) -> str | None:

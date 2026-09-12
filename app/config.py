@@ -111,6 +111,17 @@ class Settings(BaseSettings):
     # 노드 선택 hook 스위치(build_route) — 0=off면 기존 거리순 동작 그대로
     scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 박준형 EDA 후 >0
     scenario_food_per_route: int = 0      # 경로당 삽입할 카페/식당 수 — 정찬희 실데이터 후 >0
+    # 위시(가고싶은 곳) 좌표 매칭 반경(m) — content_id가 달라도 이만큼 가까우면 같은 장소로 본다.
+    #  TourAPI가 한 장소를 여러 콘텐츠로 등록해(예: 종묘 126510 / 종묘광장공원 126492, 67m)
+    #  content_id만 비교하면 같은 곳이 앵커·후보로 두 번 들어간다.
+    scenario_wish_coord_match_m: int = 100
+    # 최종 경로에서 같은 지점으로 볼 거리(m) — 이 안이면 한 노드만 남긴다(위시 우선).
+    #  ⚠️ trigger_radius(도착 인증 반경)와 **분리된 고정값**이다. 묶어 두면 나중에 트리거를
+    #     다시 좁힐 때 중복이 조용히 되살아난다(조치계획 20260912 결정).
+    scenario_dupe_merge_m: int = 100
+    # 앵커 자동완성 검색이 받아올 후보 수. 앱이 반경으로 거르므로 넉넉해야 한다 —
+    #  8건이면 반경 안 장소가 관련도 순위에서 밀려 아예 안 보인다(QA1 한계).
+    scenario_search_top_n: int = 30
 
     # --- 생성 QA 대응 루프 (A1 — app/scenario/qa_graph.py) ---
     #  run_qa가 잡은 결함을 '경고 로그'로 흘리지 않고, 문제가 된 LLM 출력만 골라 재생성한다.

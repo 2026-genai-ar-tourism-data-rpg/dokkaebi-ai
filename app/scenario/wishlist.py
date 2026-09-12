@@ -24,8 +24,23 @@
 #            (실측: 경복궁 grounding 0자 → 모델 기억으로 발화). content_id는 이미 손에
 #            있으므로 키 하나만 실어 주면 detailCommon2로 원문을 받는다.
 # 구현일: 2026-08-19 | 작성: kys (dialogue-rework/kys/v1)
+# ------------------------------------------------------------
+# [v4] 좌표 기반 위시 매칭 — 같은 장소가 경로에 두 번 나오던 결함(QA3).
+# 구현(요약): content_id만 비교하던 매칭에 **좌표 매칭**을 덧댄다. TourAPI는 한 장소를
+#            여러 콘텐츠로 등록하고(실측: 종묘 126510 / 종묘광장공원 126492, 67m),
+#            더구나 종묘 본체는 locationBasedList2에 아예 없어(rows·반경·contentTypeId를
+#            바꿔도 안 나옴) content_id 매칭이 **항상** 실패했다. 그래서 위시는 합성 앵커로,
+#            옆 콘텐츠는 일반 후보로 들어가 앱 화면에 같은 곳이 1·2번으로 찍혔다.
+#            → 후보 중 scenario_wish_coord_match_m(기본 100m) 안에 있으면 그 후보를
+#              앵커로 채택한다. node_id가 후보 것이 되므로 중복 채움이 원천 차단된다.
+#              단 **표시 이름·content_id·좌표는 사용자가 고른 위시 값을 유지**한다 —
+#              후보 것을 쓰면 "종묘"를 골랐는데 "종묘광장공원"으로 바뀌어 나간다.
+# 구현일: 2026-09-12 | 작성: pjh (wish-dupe-search-radius/pjh/v1)
+# 관련: 조치계획 20260912 QA3 · route_builder 근접 중복 제거(같은 결함의 경계 쪽)
 # ============================================================
+from app.config import get_settings
 from app.core.logger import get_logger
+from app.tourapi.client import haversine_m
 
 logger = get_logger(__name__)
 
@@ -59,14 +74,51 @@ def _build_content_id_index(nodes: list[dict]) -> dict[str, dict]:
     return index
 
 
-def _to_anchor(node: dict) -> dict:
+def _to_anchor(node: dict, wish=None) -> dict:
     """반경 내 매칭 노드를 위시 앵커로 변환(원본 비파괴 얕은 복사 + source 마킹).
 
-    원본 노드 정보(node_id·name·map_x·map_y·dist_m 등)는 보존하고, source를 위시로
-    덮어쓰며 out_of_radius=False로 표시한다. node_id는 그대로라 _fill_distance의
-    dedupe(seen=node_id)·거리순 정렬과 호환된다.
+    원본 노드 정보(node_id·addr·dist_m 등)는 보존하고, source를 위시로 덮어쓰며
+    out_of_radius=False로 표시한다. node_id는 그대로라 _fill_distance의
+    dedupe(seen=node_id)·거리순 정렬과 호환된다 — 이게 중복 방지의 핵심이다.
+
+    wish를 주면(좌표 매칭으로 붙은 경우) **사용자가 고른 정체성**을 덮어쓴다:
+      · name — "종묘"를 골랐는데 옆 콘텐츠 이름("종묘광장공원")으로 나가면 안 된다.
+      · tour_content_id — 원문(detailCommon2) 조회 키. 위시 것이 그 장소의 원문이다.
+      · map_x/map_y — 도착 인증 좌표. 사용자가 고른 지점이 기준이어야 한다.
     """
-    return {**node, "source": SOURCE_WISHLIST, OUT_OF_RADIUS_FLAG: False}
+    anchor = {**node, "source": SOURCE_WISHLIST, OUT_OF_RADIUS_FLAG: False}
+    if wish is None:
+        return anchor
+    if wish.name:
+        anchor["name"] = wish.name
+    anchor[NODE_CONTENT_ID_KEY] = str(wish.content_id)
+    if wish.lat is not None and wish.lng is not None:
+        anchor["map_x"], anchor["map_y"] = wish.lng, wish.lat
+    return anchor
+
+
+def _coord_match(nodes: list[dict], lat: float | None, lng: float | None) -> dict | None:
+    """위시 좌표에서 scenario_wish_coord_match_m 안에 있는 가장 가까운 후보를 찾는다.
+
+    content_id가 다른 '같은 장소'(TourAPI 중복 등록)를 붙잡는 마지막 그물이다.
+    좌표가 없거나 임계값 밖이면 None → 호출부가 합성 앵커로 떨어진다.
+    """
+    if lat is None or lng is None:
+        return None
+    limit = get_settings().scenario_wish_coord_match_m
+    best, best_d = None, None
+    for node in nodes:
+        if node.get("map_x") is None or node.get("map_y") is None:
+            continue
+        dist = haversine_m(lat, lng, node["map_y"], node["map_x"])
+        if dist <= limit and (best_d is None or dist < best_d):
+            best, best_d = node, dist
+    if best is not None:
+        logger.info(
+            "위시 좌표 매칭: 후보 %s(%s) %.1fm → 같은 장소로 판단",
+            best.get("node_id"), best.get("name"), best_d,
+        )
+    return best
 
 
 def _synthesize_anchor(content_id: str, name: str | None,
@@ -101,6 +153,9 @@ def select_wishlist_anchors(nodes: list[dict], wishlist: list) -> list[dict]:
       - wishlist가 비면 [] 반환(no-op — 기존 거리순 동선 보존).
       - 위시 content_id가 nodes의 ``tour_content_id``와 매칭되면 그 노드를 앵커로
         채택하고 source="wishlist"로 마킹한다(반경 내, out_of_radius=False).
+      - content_id가 안 맞아도 위시 좌표에서 scenario_wish_coord_match_m(기본 100m)
+        안에 후보가 있으면 같은 장소로 보고 그 노드를 앵커로 쓴다(v4). 이때 표시 이름·
+        content_id·좌표는 위시 값을 유지한다 — 같은 장소가 두 번 들어가는 것을 막는다.
       - 매칭되는 노드가 없으면(반경 밖) 위시 좌표로 합성 노드를 만든다:
         ``{node_id: "wish_<content_id>", name, map_x, map_y, dist_m,
         source: "wishlist", out_of_radius: True}``. 이때 WARN 로그를 남긴다.
@@ -148,6 +203,17 @@ def select_wishlist_anchors(nodes: list[dict], wishlist: list) -> list[dict]:
             matched += 1
             logger.debug(
                 "위시 content_id=%s → 반경 내 노드 %s 앵커 채택", content_id, node.get("node_id")
+            )
+            continue
+
+        # content_id 불일치 → 좌표로 한 번 더(같은 장소의 다른 콘텐츠, v4)
+        near = _coord_match(nodes, wish.lat, wish.lng)
+        if near is not None:
+            anchors.append(_to_anchor(near, wish))
+            matched += 1
+            logger.info(
+                "위시 content_id=%s → 좌표 매칭 노드 %s 앵커 채택(이름·원문키는 위시 값 유지)",
+                content_id, near.get("node_id"),
             )
             continue
 

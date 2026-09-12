@@ -23,7 +23,19 @@
 #        식음 삽입이 generator로 옮겨가면서 ⑥ backfill 뒤에 노드가 추가돼, 식음 노드만
 #        dist_m=None으로 앱에 나가고 있었다 — generator가 삽입 후 한 번 더 호출한다.
 # 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
+# ------------------------------------------------------------
+# [v4] 근접 중복 제거 — 같은 장소가 경로에 두 칸을 차지하던 결함(QA3) 경계 쪽.
+# 구현(요약): 중복 판정이 node_id 동일성만 봤다. TourAPI가 한 장소를 여러 콘텐츠로
+#            등록하면(실측: 종묘 126510 / 종묘광장공원 126492, 67m) node_id가 달라
+#            둘 다 경로에 남고, 간격이 도착 인증 반경보다 좁아 한 자리에서 두 노드가
+#            동시에 인증됐다. → 앵커 병합·거리 채움 모두에서 **좌표 근접**을 함께 본다.
+#            임계값은 config.scenario_dupe_merge_m(기본 100m) 고정 — trigger_radius와
+#            묶지 않는다(트리거를 다시 좁히면 중복이 조용히 되살아나기 때문).
+#            채움 단계에서는 '드롭'이 아니라 '건너뛰고 다음 후보'라 노드 수는 유지된다.
+# 구현일: 2026-09-12 | 작성: pjh (wish-dupe-search-radius/pjh/v1)
+# 관련: 조치계획 20260912 QA3 · wishlist._coord_match(같은 결함의 앵커 쪽)
 # ============================================================
+from app.config import get_settings
 from app.core.logger import get_logger
 from app.scenario.density import select_lowtraffic_anchors
 from app.scenario.wishlist import select_wishlist_anchors
@@ -100,6 +112,24 @@ def backfill_dist_m(
     return route
 
 
+def _merge_limit_m() -> int:
+    """같은 지점으로 볼 거리(m). 설정 한 곳에서만 읽는다(매직넘버 금지)."""
+    return get_settings().scenario_dupe_merge_m
+
+
+def _same_spot(a: dict, b: dict, limit_m: int) -> bool:
+    """두 노드가 사실상 같은 장소인지 — node_id가 같거나 좌표가 limit_m 안이면 True.
+
+    TourAPI 중복 등록(종묘/종묘광장공원)처럼 id가 다른 같은 장소를 잡기 위한 판정이다.
+    좌표가 없는 노드는 거리로 판정할 수 없어 id 비교만 한다(기존 동작 유지).
+    """
+    if a.get("node_id") == b.get("node_id"):
+        return True
+    if None in (a.get("map_x"), a.get("map_y"), b.get("map_x"), b.get("map_y")):
+        return False
+    return haversine_m(a["map_y"], a["map_x"], b["map_y"], b["map_x"]) <= limit_m
+
+
 def _placeable(nodes: list[dict], *, what: str) -> list[dict]:
     """좌표(map_x/map_y)가 있는 노드만 남긴다 — 동선 배치·거리계산의 최소 전제.
 
@@ -132,7 +162,24 @@ def _dedupe_anchors(anchors: list[dict]) -> list[dict]:
         if current.get("source") == "wishlist" or anchor.get("source") == "wishlist":
             combined["source"] = "wishlist"
         merged[node_id] = combined
-    return [merged[node_id] for node_id in order]
+
+    # 좌표 근접 병합(v4) — id가 달라도 같은 자리면 하나만 남긴다. 먼저 확정된 앵커를
+    # 남기되(위시 입력 순서 보존), 위시 앵커가 나중에 와도 위시가 이긴다.
+    limit = _merge_limit_m()
+    kept: list[dict] = []
+    for anchor in (merged[node_id] for node_id in order):
+        twin = next((k for k in kept if _same_spot(k, anchor, limit)), None)
+        if twin is None:
+            kept.append(anchor)
+            continue
+        logger.info(
+            "근접 앵커 병합: %s(%s) ↔ %s(%s) — 같은 지점(%dm 이내)",
+            twin.get("node_id"), twin.get("name"),
+            anchor.get("node_id"), anchor.get("name"), limit,
+        )
+        if anchor.get("source") == "wishlist" and twin.get("source") != "wishlist":
+            kept[kept.index(twin)] = anchor
+    return kept
 
 
 def _select_count(nodes: list[dict], anchors: list[dict], count: int) -> list[dict]:
@@ -140,15 +187,31 @@ def _select_count(nodes: list[dict], anchors: list[dict], count: int) -> list[di
 
     선택만 담당 — 최종 방문 순서는 _order_route가 정한다(NN 동선).
     앵커가 count를 넘어도 전부 보존한다(결정 C) — 거리 채움만 count 도달 시 중단.
+
+    v4: 이미 고른 노드와 **같은 자리**(node_id 동일 또는 좌표 근접)인 후보는 건너뛴다.
+    앵커가 위시 장소를 이미 들고 있는데 그 옆에 붙은 다른 콘텐츠가 후보로 또 들어오면
+    앱 화면에 같은 곳이 두 칸으로 찍히기 때문이다. 건너뛴 만큼 다음 후보로 채워
+    노드 수(count)는 그대로 유지된다.
     """
     selected: list[dict] = _dedupe_anchors(anchors)
     seen = {a["node_id"] for a in selected}
+    limit = _merge_limit_m()
     for n in nodes:
         if len(selected) >= count:
             break
-        if n["node_id"] not in seen:
-            selected.append(n)
+        if n["node_id"] in seen:
+            continue
+        twin = next((sel for sel in selected if _same_spot(sel, n, limit)), None)
+        if twin is not None:
+            logger.info(
+                "근접 후보 건너뜀: %s(%s) — 이미 선택된 %s(%s)와 같은 지점(%dm 이내)",
+                n.get("node_id"), n.get("name"),
+                twin.get("node_id"), twin.get("name"), limit,
+            )
             seen.add(n["node_id"])
+            continue
+        selected.append(n)
+        seen.add(n["node_id"])
     return selected
 
 
