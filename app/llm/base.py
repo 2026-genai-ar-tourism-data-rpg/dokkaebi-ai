@@ -17,3 +17,13 @@ class LLMProvider(ABC):
         (LLMClient가 그 예외를 잡아 백오프 재시도함)
         """
         ...
+
+    async def generate_with_images(self, prompt: str, images: list[str], **kwargs) -> str:
+        """프롬프트 + 이미지들(URL 또는 data: URI) -> 생성 텍스트. 사진 검증(photo_verify)이 쓴다.
+
+        기본 구현은 미지원 — 텍스트 전용 provider가 조용히 이미지를 버리고 답하면
+        "검증됐다"는 거짓 결과가 나가므로, 명시적으로 실패시킨다.
+        구현 규약은 generate와 같다(429 → LLMRateLimitError).
+        """
+        from app.core.exceptions import LLMCallError
+        raise LLMCallError(f"{type(self).__name__}: 이미지 입력 미지원")

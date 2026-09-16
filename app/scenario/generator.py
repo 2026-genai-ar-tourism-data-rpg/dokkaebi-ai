@@ -107,6 +107,7 @@ from app.scenario.route_builder import backfill_dist_m, build_route
 from app.scenario.wishlist import SOURCE_WISHLIST
 from app.services.dialogue_service import run_dialogue
 from app.tourapi.client import TourAPIClient
+from app.tourapi.photo_refs import attach_photo_refs
 from app.tourapi.food import interleave_food_async
 logger = get_logger(__name__)
 # 핫패스 공용 TourAPI 클라이언트 (키 없으면 mock)
@@ -512,16 +513,19 @@ async def _content_for(node: dict, meta: dict, motivations: list[str],
     attempts = 1 + max(0, get_settings().scenario_mission_max_retries)
     for attempt in range(1, attempts + 1):
         try:
-            return await generate_mission(
+            mission = await generate_mission(
                 name, overview, mtype,
                 feedback=_MISSION_RETRY_FEEDBACK if attempt > 1 else "",
             )
+            # [photo-refs] 촬영 미션이면 TourAPI 실존 명소·참조 사진을 붙인다(실패해도 미션은 그대로).
+            return await attach_photo_refs(mission, node)
         except Exception as e:
             logger.warning("노드 %s 미션 생성 실패(%d/%d): %s",
                            node.get("node_id"), attempt, attempts, e)
     if flags is not None:
         flags.append(f"{name}: 미션 생성 실패 → 제네릭 미션 폴백")
-    return generic_mission(name, mtype)     # 기존 제네릭 폴백 유지 — 코스는 계속 만들어진다
+    # 기존 제네릭 폴백 유지 — 코스는 계속 만들어진다. 촬영 미션이면 참조 사진은 그래도 붙인다.
+    return await attach_photo_refs(generic_mission(name, mtype), node)
 
 # 미션 재시도 시 다음 호출에 싣는 지시 — 직전 실패 원인(형식 위반)을 알려주고 다시 쓰게 한다.
 _MISSION_RETRY_FEEDBACK = (

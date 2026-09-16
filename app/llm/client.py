@@ -101,6 +101,29 @@ class LLMClient:
                 logger.debug("LLM %.2fs (프롬프트 %d자 → %d자)", took, len(prompt), len(out))
             return out
 
+    async def generate_with_images(self, prompt: str, images: list[str], **kwargs) -> str:
+        """이미지 동반 호출 — 세마포어·429 백오프는 generate와 같은 규칙으로 감싼다."""
+        async with self._sem:
+            t0 = time.perf_counter()
+            attempt = 0
+            while True:
+                try:
+                    out = await self._provider.generate_with_images(prompt, images, **kwargs)
+                    logger.info("비전 LLM %.1fs (이미지 %d장 → %d자)", time.perf_counter() - t0, len(images), len(out))
+                    return out
+                except LLMRateLimitError:
+                    attempt += 1
+                    if attempt > self._max_retries:
+                        logger.error("비전 LLM 429 재시도 소진 (%d회)", self._max_retries)
+                        raise LLMCallError("비전 LLM rate limit 재시도 소진")
+                    delay = min(self._backoff_base * (2 ** (attempt - 1)), self._backoff_max)
+                    delay += random.uniform(0, delay * 0.1)
+                    logger.warning("비전 LLM 429 → %.2fs 후 재시도 (%d/%d)", delay, attempt, self._max_retries)
+                    await asyncio.sleep(delay)
+                except Exception as e:
+                    logger.error("비전 LLM 호출 실패 (%.1fs, 이미지 %d장): %s", time.perf_counter() - t0, len(images), e)
+                    raise
+
     async def generate_many(self, prompts: list[str], **kwargs) -> list[str]:
         """여러 프롬프트 병렬 호출. 각 호출이 세마포어를 공유해 동시성 제한됨."""
         if not prompts:
@@ -134,6 +157,30 @@ class LLMClient:
 
 
 _client: LLMClient | None = None
+_vision_client: LLMClient | None = None
+
+
+def get_vision_llm() -> LLMClient:
+    """사진 검증용 비전 모델 클라이언트(싱글톤). config.vision_* 가 비어 있으면 llm_* 를 그대로 쓴다.
+
+    텍스트 모델(solar-pro)과 비전 모델을 따로 둘 수 있게 분리했다 — 비전은 호출 수가 적고
+    비싸서, 텍스트와 같은 세마포어를 나눠 쓰면 시나리오 생성이 사진 검증에 밀린다.
+    """
+    global _vision_client
+    if _vision_client is None:
+        s = get_settings()
+        if s.vision_provider == "mock":
+            _vision_client = LLMClient(provider=MockProvider())
+        else:
+            _vision_client = LLMClient(provider=OpenAICompatibleProvider(
+                base_url=s.vision_base_url or s.llm_base_url,
+                api_key=s.vision_api_key or s.llm_api_key,
+                model=s.vision_model,
+                temperature=0.1,
+                max_tokens=s.llm_max_tokens,
+                timeout=s.vision_timeout,
+            ))
+    return _vision_client
 
 
 def get_llm() -> LLMClient:

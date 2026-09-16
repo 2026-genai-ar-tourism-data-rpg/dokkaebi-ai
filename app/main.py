@@ -39,12 +39,14 @@ def create_app() -> FastAPI:
     # 외부 키는 없어도 예외 없이 폴백한다 — 기동 때 안 찍어두면 "왜 가격대가 다 비지"를
     # 나중에 앱 화면만 보고 역추적하게 된다(2026-09-12 실제로 겪음).
     logger.info(
-        "외부 연동: TourAPI=%s · GooglePlaces=%s · 임베딩=%s · 캐시=%s · 식음%d곳/코스",
+        "외부 연동: TourAPI=%s · GooglePlaces=%s · 임베딩=%s · 캐시=%s · 식음%d곳/코스 · 사진검증=%s",
         "키있음" if s.tourapi_service_key else "키없음(mock 종로)",
         "키있음" if s.google_maps_api_key else "키없음(가격대 전부 미상)",
         s.embed_provider,
         s.cache_backend,
         s.scenario_food_per_route,
+        # mock이면 모든 사진이 통과한다 — 배포에서 이 글자가 보이면 .env가 빠진 것.
+        "⚠MOCK(전부 통과)" if s.vision_provider == "mock" else f"{s.vision_provider}/{s.vision_model}",
     )
     return app
 

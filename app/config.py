@@ -35,6 +35,17 @@ class Settings(BaseSettings):
     llm_backoff_max: float = 20.0       # 백오프 상한(초)
     llm_timeout: float = 30.0           # 단일 호출 타임아웃(초)
 
+    # --- 비전(사진 검증) 모델 — photo_verify_service.py ---
+    #  텍스트 모델과 분리. 비어 있으면 llm_* 를 재사용한다(같은 계정의 비전 모델이면 model만 바꾸면 됨).
+    #  mock 이면 이미지가 있으면 일치로 답한다(테스트·키 없는 로컬용).
+    vision_provider: str = "mock"          # mock | upstage | openai (OpenAI 호환이면 무엇이든)
+    vision_model: str = "gpt-4o-mini"      # 비전 입력을 받는 모델명 — 실서비스에서 반드시 확인
+    vision_base_url: str = ""              # 비면 llm_base_url
+    vision_api_key: str = ""               # 비면 llm_api_key
+    vision_timeout: float = 25.0
+    photo_verify_confidence: float = 0.75  # 이 이상이면 텍스트 일치 없이도 검증 통과
+    photo_verify_max_refs: int = 2         # 참조 사진 동봉 상한 — 많을수록 느리고 비싸다
+
     # --- 임베딩 provider 선택 (의미검색 기능 ②③ — 기획 11-10) ---
     #  mock              : 키 없이 구동(결정적 더미 벡터)
     #  upstage | openai  : OpenAI 호환(/embeddings) — base_url/model/key만 바꾸면 호환끼리 교체
@@ -69,6 +80,12 @@ class Settings(BaseSettings):
     tourapi_mobile_os: str = "ETC"
     tourapi_mobile_app: str = "dokkaebi"
     tourapi_timeout: float = 10.0
+
+    # --- 사진 참조 (photo_refs.py — PHOTO_FIND·PATH_TRACE 타깃·참조사진) ---
+    #  갤러리 세부 태그에서 고르는 "찍을 것" 수와, ARKit 참조 후보로 실을 노드 사진 상한.
+    #  사진은 앱이 노드 진입 시 내려받으므로 6장이면 수 MB — 더 올리면 첫 진입이 느려진다.
+    photo_refs_max_targets: int = 3
+    photo_refs_max_images: int = 6
 
     # --- OSM (키리스 실데이터 폴백 — TourAPI 키 없을 때 POI·검색 원천) ---
     #  Overpass(반경 POI)·Nominatim(키워드 검색) 공개 인스턴스. 상용 트래픽 금지·

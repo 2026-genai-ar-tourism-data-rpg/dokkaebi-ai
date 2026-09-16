@@ -13,3 +13,9 @@ class MockProvider(LLMProvider):
     async def generate(self, prompt: str, **kwargs) -> str:
         """더미 도깨비 대사 반환 (실제 LLM 호출 없음)."""
         return "[mock 도깨비] 허허, 아직 진짜 LLM이 붙지 않았느니라."
+
+    async def generate_with_images(self, prompt: str, images: list[str], **kwargs) -> str:
+        """사진 검증용 더미 판정. 이미지가 하나도 없으면 불일치, 있으면 일치 — 테스트가 예측 가능해야 한다."""
+        if not images:
+            return '{"match": false, "confidence": 0.1, "text_seen": "", "reason": "[mock] 이미지 없음"}'
+        return '{"match": true, "confidence": 0.9, "text_seen": "[mock]", "reason": "[mock] 이미지 수신"}'

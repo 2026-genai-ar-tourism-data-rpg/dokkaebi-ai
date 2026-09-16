@@ -213,3 +213,29 @@ class NearbyPlace(BaseModel):
 class NearbyResponse(BaseModel):
     """현재 위치 반경 내 POI(거리순). 시나리오 생성과 달리 LLM을 타지 않아 즉시 응답."""
     places: list[NearbyPlace]
+
+
+# --- 사진 검증 (PHOTO_FIND·PATH_TRACE 촬영 미션 완료 판정) ---
+class PhotoVerifyRequest(BaseModel):
+    """플레이어 사진 1장 + 그 노드의 참조 사진(photo_refs.ref_image) → 같은 대상인지 판정."""
+    user_id: str | None = Field(None, description="운영 로그 상관관계용(선택)")
+    user_name: str | None = None
+    node_id: str
+    node_name: str = Field("", description="장소명 — 프롬프트·글자 대조에 쓴다")
+    target: str = Field(..., description="찍어야 했던 것 (photo_targets[i])")
+    ref_images: list[str] = Field(default_factory=list, description="TourAPI 참조 사진 URL (photo_refs[].ref_image)")
+    aliases: list[str] = Field(default_factory=list, description="다른 이름·한자 (예: 興化門). 글자 대조용")
+    image_b64: str = Field(..., description="플레이어 사진 — data URI 또는 순수 base64(JPEG)")
+    mime: str = Field("image/jpeg")
+
+
+class PhotoVerifyResponse(BaseModel):
+    """verified=None 은 '판정 불가(모델 장애·형식 오류)' — 앱은 행위 완료로 폴백한다."""
+    verified: bool | None
+    mode: str                              # vision | unverified
+    confidence: float = 0.0
+    text_seen: str = ""
+    reason: str = ""
+    npc_line: str
+    refs_used: int = 0
+

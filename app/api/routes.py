@@ -38,6 +38,8 @@ from app.api.schemas import (
     DialogueTurnResponse,
     NearbyPlace,
     NearbyResponse,
+    PhotoVerifyRequest,
+    PhotoVerifyResponse,
     ScenarioGenRequest,
     ScenarioGenResponse,
     SearchCandidate,
@@ -50,6 +52,7 @@ from app.scenario.generator import generate_scenario
 from app.scenario.request import LatLng, ScenarioRequest, WishItem
 from app.services.branching_service import run_branching
 from app.services.dialogue_service import run_dialogue
+from app.services.photo_verify_service import verify_photo
 from app.tourapi.client import TourAPIClient, haversine_m
 
 router = APIRouter(prefix="/v1", tags=["ai"])
@@ -252,6 +255,27 @@ async def nearby(lat: float, lng: float, radius_m: int = 2000, top_n: int = 20) 
         )
         for n, d in zip(nodes, details)
     ])
+
+
+@router.post("/photo/verify", response_model=PhotoVerifyResponse)
+async def photo_verify(req: PhotoVerifyRequest) -> PhotoVerifyResponse:
+    """[엔드포인트] 촬영 미션 사진 판정 — 게임 서버가 앱 사진을 전달해 호출.
+
+    실시간 AR은 기기(ARKit)가 맡고, '무엇을 찍었나'는 여기서 비전 모델 1회로 본다.
+    모델 장애 시에도 200(mode=unverified) — 현장에서 셔터가 막히면 안 된다.
+    """
+    bind_user(req.user_id, req.user_name)
+    data_url = req.image_b64 if req.image_b64.startswith("data:") else f"data:{req.mime};base64,{req.image_b64}"
+    logger.info(
+        "사진 검증 요청: node=%s(%s) target=%s 참조%d장 별칭=%s 이미지≈%dKB",
+        req.node_id, req.node_name or "이름없음", req.target, len(req.ref_images),
+        ",".join(req.aliases) or "없음", len(req.image_b64) * 3 // 4 // 1024,
+    )
+    out = await verify_photo(
+        image_data_url=data_url, target=req.target, place_name=req.node_name,
+        ref_images=req.ref_images, aliases=req.aliases,
+    )
+    return PhotoVerifyResponse(**out)
 
 
 @router.get("/health")
