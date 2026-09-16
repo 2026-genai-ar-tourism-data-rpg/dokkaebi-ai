@@ -298,7 +298,7 @@ def interleave_food(route: list[dict], *, budget: int | None = None,
         if choice is None:
             continue
         used_ids.add(choice["node_id"])
-        node = {**choice, "coupon": {"to_kind": "food", "amount": 500}}   # 상권 쿠폰(mock 유지)
+        node = {**choice, "coupon": {"to_kind": "food", "amount": get_settings().scenario_food_coupon}}
         picked.append((ins_idx, node))
 
     if not picked:
@@ -378,7 +378,7 @@ async def interleave_food_async(route: list[dict], *, budget: int | None = None,
         used_ids.add(choice["node_id"])
         picked.append((ins_idx, {
             **choice,
-            "coupon": {"to_kind": "food", "amount": 500},
+            "coupon": {"to_kind": "food", "amount": get_settings().scenario_food_coupon},
         }))
 
     if not picked:

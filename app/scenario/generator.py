@@ -76,6 +76,7 @@ from app.core.logger import get_logger
 from app.core.wording import progress_state, stone_position
 from app.region.memory_cache import get_region_cache
 from app.scenario.density import density_label
+from app.scenario.ending import attach_endings
 from app.scenario.node_content import (
     classify_motivations,
     generate_mission,
@@ -346,6 +347,7 @@ async def generate_basic_scenario(
     # QA 재생성까지 끝난 다음에 자른다 — 재생성이 미션을 새로 만들어도 난이도가 풀리지 않는다.
     node_sequence = [apply_ladder_limit(q, difficulty) for q in node_sequence]
     node_sequence = link_state_graph(node_sequence)
+    node_sequence = attach_endings(node_sequence, region)
     return {
         "scenario_id": _make_scenario_id(region, [q["node_id"] for q in node_sequence]),
         "title": f"{region}의 기억석 — {stone_total}조각 코스",

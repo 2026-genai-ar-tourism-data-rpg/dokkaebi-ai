@@ -37,6 +37,8 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
+from app.config import get_settings
+
 
 # ── 닫힌 어휘 (명세 2절 — 코드가 잠그는 정적 구조) ─────────────────────
 
@@ -536,7 +538,7 @@ def build_choices(quest: dict[str, Any], *, is_food: bool) -> list[dict[str, Any
             "id": "B",
             "text": "해야 할 일과 보상을 먼저 확인한다.",
             "flags": ["실리"],
-            "reward_mod": {"coupon": 100},
+            "reward_mod": {"coupon": get_settings().scenario_choice_coupon},
         },
         {"id": "C", "text": "주변을 먼저 살펴본다."},
     ]
@@ -1025,7 +1027,7 @@ def _action_quiz(quest: dict[str, Any]) -> dict[str, Any]:
         "text": str(quiz.get("q") or f"{quest.get('name') or '이곳'}의 단서를 올바르게 확인한 방법은 무엇일까?"),
         "choices": options,
         "answer_idx": answer_idx,
-        "correct": {"exp": 30, "coupon": 200},   # 명세 6-1 예시 정합(보상 증폭은 보너스만)
+        "correct": {"coupon": get_settings().scenario_quiz_coupon},
         "hints": "ladder",
         "wrong_hint": str(quiz.get("wrong_hint") or GENERIC_ACTION_WRONG_HINT),
     }
@@ -1036,7 +1038,7 @@ def _free_path_quiz(name: str) -> dict[str, Any]:
         "text": f"{name}에서 구매 없이 장소를 인증하려면 무엇을 해야 할까?",
         "choices": ["매장 외관과 메뉴판을 확인한다", "영수증을 임의로 만든다", "아무 확인 없이 완료한다"],
         "answer_idx": 0,
-        "correct": {"exp": 10},
+        "correct": {},  # 경험치는 서버가 자체 기준으로 지급
         "hints": "ladder",
     }
 
