@@ -91,6 +91,70 @@ class TestVerify:
         assert out["mode"] == "unverified" and stub.images is None   # 모델을 부르지도 않는다
 
 
+@pytest.mark.asyncio
+class TestOcrPath:
+    """provider가 match=null(OCR)로 답할 때 — 글자 대조가 판정을 끝낸다."""
+
+    async def test_reversed_hanja_from_signboard_passes(self, monkeypatch):
+        # 실측: 흥화문 정면 사진을 OCR이 "門化興 / ㅎ 한국관광공사"로 읽었다.
+        _use(monkeypatch, '{"match": null, "confidence": 0.98, "text_seen": "門化興 ㅎ 한국관광공사", "reason": "OCR 글자 대조"}')
+        out = await svc.verify_photo(image_data_url=IMG, target="흥화문", place_name="경희궁", ref_images=[], aliases=["興化門"])
+        assert out["verified"] is True and out["mode"] == "ocr"
+        assert "門化興" in out["npc_line"]
+
+    async def test_info_board_korean_passes(self, monkeypatch):
+        _use(monkeypatch, '{"match": null, "confidence": 0.9, "text_seen": "경희궁 흥화문 경희궁지 이곳은 조선 시대의", "reason": "OCR"}')
+        out = await svc.verify_photo(image_data_url=IMG, target="흥화문", place_name="경희궁", ref_images=[])
+        assert out["verified"] is True
+
+    async def test_no_text_is_unverified_trust(self, monkeypatch):
+        # 글자 없는 사진(마당·전경) — OCR로는 판정 불가 → 막지 않고 신뢰로 넘긴다.
+        _use(monkeypatch, '{"match": null, "confidence": 0.0, "text_seen": "", "reason": "OCR"}')
+        out = await svc.verify_photo(image_data_url=IMG, target="마당", place_name="경희궁", ref_images=[])
+        assert out["verified"] is None and out["mode"] == "unverified"
+
+    async def test_other_text_is_mismatch(self, monkeypatch):
+        _use(monkeypatch, '{"match": null, "confidence": 0.95, "text_seen": "CITI 은행", "reason": "OCR"}')
+        out = await svc.verify_photo(image_data_url=IMG, target="흥화문", place_name="경희궁", ref_images=[])
+        assert out["verified"] is False
+
+
+class TestUpstageOcrProvider:
+    def test_data_url_decoding_and_url_rejected(self):
+        from app.llm.providers.upstage_ocr import _decode_data_url
+        data, mime = _decode_data_url("data:image/png;base64,aGVsbG8=")
+        assert data == b"hello" and mime == "image/png"
+        data, mime = _decode_data_url("aGVsbG8=")
+        assert data == b"hello" and mime == "image/jpeg"
+        with pytest.raises(LLMCallError):
+            _decode_data_url("https://tong.visitkorea.or.kr/x.jpg")
+
+    @pytest.mark.asyncio
+    async def test_response_mapped_to_contract(self, monkeypatch):
+        import httpx
+        from app.llm.providers import upstage_ocr as mod
+
+        class _Resp:
+            status_code = 200
+            text = ""
+            def json(self): return {"text": "門化興\n한국관광공사", "confidence": 0.97, "pages": []}
+
+        class _Client:
+            def __init__(self, *a, **k): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def post(self, url, headers=None, files=None, data=None):
+                assert url.endswith("/document-digitization") and data == {"model": "ocr"}
+                assert "document" in files
+                return _Resp()
+
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _Client)
+        p = mod.UpstageOcrProvider(base_url="https://api.upstage.ai/v1", api_key="k")
+        import json
+        out = json.loads(await p.generate_with_images("무시", ["data:image/jpeg;base64,aGVsbG8="]))
+        assert out["match"] is None and out["text_seen"] == "門化興 한국관광공사" and out["confidence"] == 0.97
+
+
 class TestEndpoint:
     def test_contract_with_mock_vision(self, monkeypatch):
         from app.llm import client as llm_client

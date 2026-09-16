@@ -50,8 +50,10 @@ def _parse(raw: str) -> dict | None:
         conf = float(d.get("confidence", 0))
     except (TypeError, ValueError):
         conf = 0.0
+    raw_match = d.get("match")
     return {
-        "match": bool(d.get("match")),
+        # None = provider가 대상 비교를 못 한다(OCR). 서비스가 글자 대조로 판정을 마무리한다.
+        "match": None if raw_match is None else bool(raw_match),
         "confidence": max(0.0, min(1.0, conf)),
         "text_seen": str(d.get("text_seen") or "").strip(),
         "reason": str(d.get("reason") or "").strip(),
@@ -70,7 +72,8 @@ def text_matches(text_seen: str, needles: list[str]) -> bool:
     for n in needles:
         for tok in re.split(r"[\s/,]+", n or ""):
             k = _norm(tok)
-            if len(k) >= 2 and k in t:
+            # 현판 한자는 우→좌라 OCR이 "門化興"으로 읽는다(실측) — 뒤집은 것도 같은 글자다.
+            if len(k) >= 2 and (k in t or k[::-1] in t):
                 return True
     return False
 
@@ -97,7 +100,7 @@ async def verify_photo(
 ) -> dict:
     """사진 1장 판정. 어떤 실패에도 raise 하지 않는다 — mode로 구분해 돌려준다.
 
-    반환: {verified: bool|None, mode: "vision"|"unverified", confidence, text_seen, reason, npc_line, refs_used}
+    반환: {verified: bool|None, mode: "vision"|"ocr"|"unverified", confidence, text_seen, reason, npc_line, refs_used}
     """
     s = get_settings()
     aliases = [a for a in (aliases or []) if a]
@@ -127,14 +130,28 @@ async def verify_photo(
         return _result(None, "unverified", 0.0, "", "응답 형식 오류", target, len(refs))
 
     by_text = text_matches(parsed["text_seen"], needles)
-    verified = bool(parsed["match"] and (parsed["confidence"] >= s.photo_verify_confidence or by_text))
+    if parsed["match"] is None:
+        # OCR 경로 — 대상 비교 없이 글자만 있다. 글자가 맞으면 통과, 글자가 없으면 판정 불가(신뢰),
+        # 글자는 읽혔는데 다른 것이면 불일치.
+        if by_text:
+            verified: bool | None = True
+        elif not parsed["text_seen"]:
+            verified = None
+        else:
+            verified = False
+        mode = "ocr"
+    else:
+        verified = bool(parsed["match"] and (parsed["confidence"] >= s.photo_verify_confidence or by_text))
+        mode = "vision"
     logger.info(
-        "사진 검증: %s → %s (match=%s conf=%.2f 글자=%s%s, 참조 %d장, %.1fs)",
-        target, "통과" if verified else "불일치", parsed["match"], parsed["confidence"],
+        "사진 검증[%s]: %s → %s (match=%s conf=%.2f 글자=%s%s, 참조 %d장, %.1fs)",
+        mode, target, {True: "통과", False: "불일치", None: "판정불가→신뢰"}[verified],
+        parsed["match"], parsed["confidence"],
         repr(parsed["text_seen"]) if parsed["text_seen"] else "없음", " ✓일치" if by_text else "",
         len(refs), time.perf_counter() - t0,
     )
-    return _result(verified, "vision", parsed["confidence"], parsed["text_seen"], parsed["reason"], target, len(refs))
+    return _result(verified, mode if verified is not None else "unverified", parsed["confidence"],
+                   parsed["text_seen"], parsed["reason"], target, len(refs))
 
 
 def _result(verified, mode, confidence, text_seen, reason, target, refs_used) -> dict:

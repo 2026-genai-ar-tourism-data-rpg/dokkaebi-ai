@@ -30,6 +30,7 @@ from app.core.logger import get_logger
 from app.llm.base import LLMProvider
 from app.llm.providers.mock import MockProvider
 from app.llm.providers.openai_compatible import OpenAICompatibleProvider
+from app.llm.providers.upstage_ocr import UpstageOcrProvider
 
 logger = get_logger(__name__)
 
@@ -171,6 +172,13 @@ def get_vision_llm() -> LLMClient:
         s = get_settings()
         if s.vision_provider == "mock":
             _vision_client = LLMClient(provider=MockProvider())
+        elif s.vision_provider == "upstage-ocr":
+            # Upstage 채팅 모델은 이미지 입력을 거절한다 → 같은 키의 Document OCR로 글자만 읽는다.
+            _vision_client = LLMClient(provider=UpstageOcrProvider(
+                base_url=s.vision_base_url or s.llm_base_url,
+                api_key=s.vision_api_key or s.llm_api_key,
+                timeout=s.vision_timeout,
+            ))
         else:
             _vision_client = LLMClient(provider=OpenAICompatibleProvider(
                 base_url=s.vision_base_url or s.llm_base_url,
