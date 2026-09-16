@@ -57,7 +57,7 @@ class TestVerify:
         out = await svc.verify_photo(image_data_url=IMG, target="흥화문", place_name="경희궁",
                                      ref_images=[], aliases=["興化門"])
         assert out["verified"] is True
-        assert "興化門" in out["npc_line"] and "선명" in out["npc_line"]   # 읽은 글자가 대사로
+        assert "興化門" in out["npc_line"] and "선명" in out["npc_line"]   # 일치한 낱말이 대사로
 
     async def test_low_confidence_without_text_fails(self, monkeypatch):
         _use(monkeypatch, '{"match": true, "confidence": 0.4, "text_seen": "", "reason": "비슷"}')
@@ -100,12 +100,16 @@ class TestOcrPath:
         _use(monkeypatch, '{"match": null, "confidence": 0.98, "text_seen": "門化興 ㅎ 한국관광공사", "reason": "OCR 글자 대조"}')
         out = await svc.verify_photo(image_data_url=IMG, target="흥화문", place_name="경희궁", ref_images=[], aliases=["興化門"])
         assert out["verified"] is True and out["mode"] == "ocr"
-        assert "門化興" in out["npc_line"]
+        assert "門化興" in out["npc_line"] and "한국관광공사" not in out["npc_line"]   # 워터마크 글자는 인용 안 함
 
-    async def test_info_board_korean_passes(self, monkeypatch):
-        _use(monkeypatch, '{"match": null, "confidence": 0.9, "text_seen": "경희궁 흥화문 경희궁지 이곳은 조선 시대의", "reason": "OCR"}')
+    async def test_info_board_korean_passes_and_line_quotes_only_the_match(self, monkeypatch):
+        long_text = "경희궁 흥화문 경희궁지 이곳은 조선 시대의 6대 궁궐 가운데 하나인 " * 6
+        _use(monkeypatch, '{"match": null, "confidence": 0.9, "text_seen": "%s", "reason": "OCR"}' % long_text)
         out = await svc.verify_photo(image_data_url=IMG, target="흥화문", place_name="경희궁", ref_images=[])
         assert out["verified"] is True
+        # 실측 결함 재현: 안내판 전문이 말풍선에 통째로 들어갔다 → 일치한 낱말만 인용한다
+        assert "'흥화문'" in out["npc_line"] and len(out["npc_line"]) < 60
+        assert out["text_seen"].startswith("경희궁 흥화문")            # 원문은 응답 필드에 남긴다(도감 캡션용)
 
     async def test_no_text_is_unverified_trust(self, monkeypatch):
         # 글자 없는 사진(마당·전경) — OCR로는 판정 불가 → 막지 않고 신뢰로 넘긴다.

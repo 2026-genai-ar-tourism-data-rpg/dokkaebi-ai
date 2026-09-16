@@ -64,22 +64,34 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s\-·ㆍ()\[\]「」『』'\"“”‘’,.]", "", s or "").lower()
 
 
-def text_matches(text_seen: str, needles: list[str]) -> bool:
-    """읽은 글자에 타깃/장소/별칭(한자 포함)의 핵심 토큰이 들어 있나. 두 글자 이상만 인정한다."""
+def matched_token(text_seen: str, needles: list[str]) -> str | None:
+    """읽은 글자에 든 타깃/장소/별칭(한자 포함)의 핵심 토큰. 없으면 None. 두 글자 이상만 인정한다.
+
+    도깨비 대사에는 이 토큰만 인용한다 — OCR 전문(안내판 300자)을 통째로 읊으면 안 된다(실측).
+    """
     t = _norm(text_seen)
     if len(t) < 2:
-        return False
+        return None
     for n in needles:
         for tok in re.split(r"[\s/,]+", n or ""):
             k = _norm(tok)
+            if len(k) < 2:
+                continue
+            if k in t:
+                return tok.strip()
             # 현판 한자는 우→좌라 OCR이 "門化興"으로 읽는다(실측) — 뒤집은 것도 같은 글자다.
-            if len(k) >= 2 and (k in t or k[::-1] in t):
-                return True
-    return False
+            if k[::-1] in t:
+                return tok.strip()[::-1]
+    return None
+
+
+def text_matches(text_seen: str, needles: list[str]) -> bool:
+    return matched_token(text_seen, needles) is not None
 
 
 def npc_line(*, verified: bool | None, target: str, text_seen: str) -> str:
-    """판정을 도깨비 말로. 검증이 화면에서 '도깨비가 알아봤다'로 보이게 한다."""
+    """판정을 도깨비 말로. 검증이 화면에서 '도깨비가 알아봤다'로 보이게 한다.
+    text_seen에는 전문이 아니라 일치한 낱말(matched_token)만 넘긴다."""
     if verified is True:
         if text_seen:
             return f"허허, '{text_seen}' 글자가 선명하구나. {target}을(를) 잘 담았느니라."
@@ -129,7 +141,8 @@ async def verify_photo(
         logger.warning("사진 검증 응답 파싱 실패(target=%s): %s", target, (raw or "")[:120].replace("\n", " "))
         return _result(None, "unverified", 0.0, "", "응답 형식 오류", target, len(refs))
 
-    by_text = text_matches(parsed["text_seen"], needles)
+    quote = matched_token(parsed["text_seen"], needles)
+    by_text = quote is not None
     if parsed["match"] is None:
         # OCR 경로 — 대상 비교 없이 글자만 있다. 글자가 맞으면 통과, 글자가 없으면 판정 불가(신뢰),
         # 글자는 읽혔는데 다른 것이면 불일치.
@@ -151,16 +164,17 @@ async def verify_photo(
         len(refs), time.perf_counter() - t0,
     )
     return _result(verified, mode if verified is not None else "unverified", parsed["confidence"],
-                   parsed["text_seen"], parsed["reason"], target, len(refs))
+                   parsed["text_seen"], parsed["reason"], target, len(refs), quote=quote)
 
 
-def _result(verified, mode, confidence, text_seen, reason, target, refs_used) -> dict:
+def _result(verified, mode, confidence, text_seen, reason, target, refs_used, quote: str | None = None) -> dict:
     return {
         "verified": verified,
         "mode": mode,
         "confidence": confidence,
-        "text_seen": text_seen,
+        "text_seen": text_seen[:300],
         "reason": reason,
-        "npc_line": npc_line(verified=verified, target=target, text_seen=text_seen),
+        # 대사엔 일치한 낱말만 — 전문을 넣으면 안내판 한 장이 통째로 말풍선에 들어간다.
+        "npc_line": npc_line(verified=verified, target=target, text_seen=quote or ""),
         "refs_used": refs_used,
     }
