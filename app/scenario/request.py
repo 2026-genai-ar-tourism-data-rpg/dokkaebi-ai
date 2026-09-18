@@ -20,6 +20,9 @@
 #            보고 우회하면 사용자가 무엇을 고르든 같은 코스가 나온다(#50 회귀).
 #            전부 기본값이 있어 미전송 시 기존 동작 그대로.
 # 구현일: 2026-08-18 | 작성: kys (explore-input-wiring/kys/v1)
+# ------------------------------------------------------------
+# [v3] wishlist_only — 위시 장소로만 코스 구성(앱 퀘스트 탭 위시리스트 '코스 생성').
+# 구현일: 2026-09-19 | 작성: ljs (wishlist-only/ljs/v1)
 # ============================================================
 from dataclasses import dataclass, field
 
@@ -66,3 +69,4 @@ class ScenarioRequest:
     with_dialogue: bool = True                     # NPC 대사 LLM 생성 여부(토큰)
     with_content: bool = True                      # 퀴즈·지령 생성 여부(토큰)
     with_branching: bool = False                   # 선택 — 갈림길(route 분기) 트리 생성(#24)
+    wishlist_only: bool = False                    # 선택 — 위시 장소로만(채움·샛길·식음·갈림길 없음)

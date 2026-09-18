@@ -27,6 +27,9 @@
 #            주고, radius_m까지 주면 반경 밖은 빼고 준다(routes.search). 좌표 미전송이면
 #            dist_m=None으로 기존 동작 그대로(하위호환).
 # 구현일: 2026-09-12 | 작성: pjh (wish-dupe-search-radius/pjh/v1)
+# ------------------------------------------------------------
+# [v7] 시나리오 요청에 wishlist_only — 앱 퀘스트 탭 위시리스트의 '코스 생성'은 고른 장소로만 만든다.
+# 구현일: 2026-09-19 | 작성: ljs (wishlist-only/ljs/v1)
 # ============================================================
 from pydantic import BaseModel, Field
 
@@ -134,6 +137,8 @@ class ScenarioGenRequest(BaseModel):
     with_dialogue: bool = True
     with_content: bool = True
     with_branching: bool = False        # 갈림길(route 분기) 트리 생성(#24). 기본 off=선형
+    wishlist_only: bool = Field(
+        False, description="위시 장소로만 코스 구성 — 거리순 채움·비인기 샛길·식음·갈림길 없음")
 
 
 class PrologueLineSchema(BaseModel):
