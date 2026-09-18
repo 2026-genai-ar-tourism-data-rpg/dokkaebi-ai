@@ -56,6 +56,11 @@
 #              앱은 이 값을 한 줄 지령으로 그린다 — 프롬프트로 문장을 요구하고,
 #              그래도 섞여 나오는 밑줄은 정리한다(모델이 식별자처럼 쓰는 버릇).
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v6] 발자국 추적 → 도깨비가 흘리고 간 엽전 줍기(앱 AR 연출이 엽전으로 바뀜).
+# 구현(요약): PHOTO_FIND·PATH_TRACE 프롬프트와 LLM 실패 시 기본값(trail_object·
+#            trail_clue, 단일 출처 node_schema)을 엽전으로. 필드 이름(trail_*)·steps 구조는 그대로.
+# 구현일: 2026-09-18 | 작성: ljs (coin-trail/ljs/v1)
 # ============================================================
 import json
 import re
@@ -66,7 +71,12 @@ from app.core.wording import NO_SOURCE_MISSION_RULE, clean_line
 from app.llm.client import get_llm
 # 폴백 오답 힌트의 단일 출처는 node_schema다 — 같은 문구를 양쪽에 적어 두면 한쪽만 고쳐
 # 사다리(H3)가 다시 범용으로 떨어진다. node_schema는 app 의존이 없어 순환하지 않는다.
-from app.scenario.node_schema import GENERIC_QUIZ_WRONG_HINT, GENERIC_WRONG_HINT
+from app.scenario.node_schema import (
+    GENERIC_QUIZ_WRONG_HINT,
+    GENERIC_WRONG_HINT,
+    TRAIL_CLUE_DEFAULT,
+    TRAIL_OBJECT_DEFAULT,
+)
 
 logger = get_logger(__name__)
 _llm = get_llm()
@@ -136,10 +146,10 @@ _BASE = (
 
 _PROMPTS = {
     "PHOTO_FIND": _BASE + (
-        "미션: 사진 촬영 → 먹물 발자국 추적 → 파편 수집.\n"
+        "미션: 사진 촬영 → 도깨비가 흘리고 간 엽전 줍기 → 파편 수집.\n"
         # 사진 검증은 글자(현판·안내판·비석)가 있을 때 가장 확실하다 — 있으면 그것을 먼저 고르게 한다.
         '아래 JSON만: {{"photo_targets":["<촬영할 요소 — 현판·안내판·비석처럼 글자가 있는 것이 있으면 우선>","<..>"],'
-        '"trail_object":"<따라갈 자취의 짧은 이름, 4~10자>","trail_clue":"<자취 묘사 1문장>",'
+        '"trail_object":"<도깨비가 흘린 엽전의 짧은 이름, 4~10자>","trail_clue":"<흘린 엽전이 이어진 모습 묘사 1문장>",'
         '"steps":["<거쳐갈 지점1>","<지점2>","<지점3>"],'
         '"find":"<찾을 파편 이름>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
@@ -176,9 +186,9 @@ _PROMPTS = {
         '"era":"<시대>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
     "PATH_TRACE": _BASE + (
-        "미션: 먹물 발자국을 따라 주변 지점들을 순서대로 밟아 파편에 도달.\n"
-        '아래 JSON만: {{"trail_object":"<따라갈 자취의 짧은 이름, 4~10자>",'
-        '"trail_clue":"<발자국 묘사 1문장>","steps":["<거쳐갈 지점/단서1>","<지점2>","<지점3>"],'
+        "미션: 도깨비가 흘리고 간 엽전을 주우며 주변 지점들을 순서대로 지나 파편에 도달.\n"
+        '아래 JSON만: {{"trail_object":"<도깨비가 흘린 엽전의 짧은 이름, 4~10자>",'
+        '"trail_clue":"<흘린 엽전이 이어진 모습 묘사 1문장>","steps":["<거쳐갈 지점/단서1>","<지점2>","<지점3>"],'
         '"photo_targets":["<도중에 찍을 이 장소의 요소>","<..>"],'
         '"find":"<도착지에서 찾을 것>","order":"<지령 1줄>","hints":["<힌트1: 어디를 살펴야 하는지 넓게 짚어 주는 한 문장. 장소 설명이 아니라 찾는 행동을 이끄는 말>","<힌트2: 찾을 대상 바로 곁을 짚어 주는 구체적인 한 문장>"]}}'
     ),
@@ -269,8 +279,8 @@ def _normalize(mtype: str, d: dict, name: str) -> dict:
     }
     if mtype == "PHOTO_FIND":
         m["photo_targets"] = _strs(d.get("photo_targets"), ["대문", "전통 건물 외관"])
-        m["trail_object"] = str(d.get("trail_object") or "먹물 발자국")
-        m["trail_clue"] = str(d.get("trail_clue") or "먹빛 발자국이 희미하게 이어지느니라.")
+        m["trail_object"] = str(d.get("trail_object") or TRAIL_OBJECT_DEFAULT)
+        m["trail_clue"] = str(d.get("trail_clue") or TRAIL_CLUE_DEFAULT)
         m["steps"] = _strs(d.get("steps"), ["첫 번째 갈림길", "오래된 나무 곁", "담장 끝"])
         m["find"] = str(d.get("find") or "기억석 파편")
     elif mtype == "COLLECT":
@@ -303,8 +313,8 @@ def _normalize(mtype: str, d: dict, name: str) -> dict:
         m["parts"] = _strs(d.get("parts"), ["주춧돌", "기둥", "지붕 부재"])
         m["era"] = str(d.get("era") or "옛 시절")
     elif mtype == "PATH_TRACE":
-        m["trail_object"] = str(d.get("trail_object") or "먹물 발자국")
-        m["trail_clue"] = str(d.get("trail_clue") or "먹빛 발자국이 희미하게 이어지느니라.")
+        m["trail_object"] = str(d.get("trail_object") or TRAIL_OBJECT_DEFAULT)
+        m["trail_clue"] = str(d.get("trail_clue") or TRAIL_CLUE_DEFAULT)
         m["steps"] = _strs(d.get("steps"), ["첫 번째 갈림길", "오래된 나무 곁", "담장 끝"])
         m["photo_targets"] = _strs(d.get("photo_targets"), [f"{name}의 전경"])
         m["find"] = str(d.get("find") or "기억석 파편")

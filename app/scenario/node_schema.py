@@ -28,6 +28,11 @@
 # - 앱 StateRef는 모르는 접두사를 조각으로 간주하므로 visit:/bonus: 같은 상태 금지.
 # - S7 D6는 별도 paths 필드가 아니라 listen 선택지 + 선택별 action 메타로 표현.
 # 구현일: 2026-07-30 | 작성: pjh (node-schema-gen/pjh/v1)
+# ------------------------------------------------------------
+# [v4] 발자국 추적 → 도깨비가 흘리고 간 엽전 줍기(앱 AR 연출이 엽전으로 바뀜).
+# 구현(요약): follow 원자의 기본 object를 "먹물 발자국" → TRAIL_OBJECT_DEFAULT("도깨비 엽전").
+#            node_content의 미션 기본값도 이 상수를 쓴다(단일 출처).
+# 구현일: 2026-09-18 | 작성: ljs (coin-trail/ljs/v1)
 # ============================================================
 from __future__ import annotations
 
@@ -134,10 +139,18 @@ _TONE_MARKERS = ("니라", "허허", "거라", "구나", "로다", "느니")
 # TourAPI KorService contenttypeid — 실제 코드표 기준(32=숙박이므로 매핑 제외).
 #   12 관광지 · 14 문화시설 · 15 축제공연행사 · 25 여행코스 · 28 레포츠 · 38 쇼핑 · 39 음식점
 
+# ── 엽전 줍기(S4 follow) 기본값 ─────────────────────────────────────
+# LLM이 자취(trail_object·trail_clue)를 안 주면 쓴다. 앱 AR은 이 자취를 엽전으로 그린다.
+# node_content의 미션 기본값도 여기서 가져간다(node_schema는 app 의존이 없어 순환하지 않는다).
+TRAIL_OBJECT_DEFAULT = "도깨비 엽전"
+TRAIL_CLUE_DEFAULT = "도깨비가 흘린 엽전이 띄엄띄엄 이어지느니라."
+
 # ── ⑤ NPC 합성(8-B) 모티프 테이블 ─────────────────────────────────────
 
 _NPC_MOTIFS: dict[str, tuple[tuple[str, str], ...]] = {
     # 테마: ((이름 접두, 모티프 표기), ...)
+    # ⚠️ 앱은 이름 접두로 캐릭터 그림을 고른다(dokkaebi-app lib/game/npc_art.dart의 folderByPrefix).
+    #    접두를 바꾸거나 늘리면 앱 표와 그림 폴더도 함께 바꿀 것 — 안 하면 기본 도깨비로 보인다.
     "heritage": (("먹", "붓·먹"), ("기와", "기와·처마"), ("현판", "현판·글씨")),
     "nature": (("솔", "솔잎·바람"), ("이끼", "이끼·바위"), ("물안개", "물·안개")),
     "market": (("엽전", "엽전·장부"), ("됫박", "됫박·저울"), ("보따리", "보따리·장터")),
@@ -684,7 +697,7 @@ def derive_clue_name(target: dict[str, Any], used: set[str] | None = None) -> st
     """단서설계규칙.md 준수 — "단서가 실제 수행 조건으로 쓰임".
 
     다음 노드(target)의 전략별로 이름이 알려줘야 하는 것을 미션 데이터에서 유도:
-    - S2 요괴 수 → 五影 / - S3 정답 일부 → 초성·한자 / - S4 발자국 수·대상 → 대문 三보
+    - S2 요괴 수 → 五影 / - S3 정답 일부 → 초성·한자 / - S4 엽전 수·대상 → 대문 三보
     - S5 촬영 대상 → 현판 / - S6 개수 → 三片 / - S1 전언 키워드
     유도 재료가 없으면 규칙 문서의 예시 풀에서 결정적으로 선택. `used`로 시나리오 내
     유일성을 보장한다(충돌 시 풀 순회 → 숫자 접미).
@@ -991,7 +1004,7 @@ def _compile_strategy(strategy: str, quest: dict[str, Any]) -> list[dict[str, An
                 #    문장이 통째로 박힌다("follow:검은 먹물이 번진 발자국이 … 이어졌다>=3").
                 #    앱이 식별자로 읽는 자리이므로 짧은 이름(trail_object)만 쓴다.
                 "a": "follow",
-                "object": str(mission.get("trail_object") or "먹물 발자국"),
+                "object": str(mission.get("trail_object") or TRAIL_OBJECT_DEFAULT),
                 "steps": max(1, len(steps) or 3),
             },
             {"a": "tap", "target": fragment_target, "count": [0, 1]},

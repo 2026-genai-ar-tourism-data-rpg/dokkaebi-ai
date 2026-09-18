@@ -13,6 +13,11 @@
 # 'ㄱ' 단서가 이 스크립트 안에서 대응되지 않는 PDF 자체의 표기 불일치 — 수정하지 않고
 # 원문 그대로 옮김(콘텐츠 판단은 담당자 몫, 발견 사항으로만 기록).
 # 구현일: 2026-08-18 | 작성: 정찬희
+# ------------------------------------------------------------
+# [v3] 먹물 발자국 추적 → 도깨비가 흘리고 간 엽전 줍기(앱 AR 연출이 엽전으로 바뀜).
+# 구현(요약): 운현궁 노드의 단서 문구·follow 대상·힌트·정원 보상 이름을 엽전으로. 단서 키
+#            '처마 3보'는 다음 노드 requires와 이어져 있어 그대로 둔다.
+# 구현일: 2026-09-18 | 작성: ljs (coin-trail/ljs/v1)
 # ============================================================
 from typing import Any
 
@@ -93,7 +98,7 @@ def build_quest_0_prologue() -> dict[str, Any]:
         "requires_mode": "none",
         "grants": ["clue:처마3보"],
         "clue": "처마3보",
-        "clue_text": "첫 기억은 높은 곳에 숨지 않는다. 오래된 집의 처마 아래, 먹빛 발자국이 세 걸음 남아 있느니라. 이 단서를 기억하거라. 처마 3보.",
+        "clue_text": "첫 기억은 높은 곳에 숨지 않는다. 오래된 집의 처마 아래, 도깨비가 흘린 엽전 세 닢이 남아 있느니라. 이 단서를 기억하거라. 처마 3보.",
         "success": ["place_verified", "listen_done"],
         "hint_ladder": _EMPTY_LADDER,
         "codex_npc": "초롱 도깨비",
@@ -136,41 +141,41 @@ def build_quest_1_unhyeongung() -> dict[str, Any]:
                             _choice("C", "좋아, 첫 조각을 찾아볼게.")],
             },
             {"a": "capture", "targets": ["대문", "처마", "전통건물 외관"]},
-            {"a": "follow", "object": "먹물 발자국", "steps": 3},
+            {"a": "follow", "object": "도깨비 엽전", "steps": 3},
             {"a": "tap", "target": "먹빛 조각"},
             {"a": "answer", "quiz": {"answer_idx": 1}},
         ],
         "choice_responses": {
             "A": {"role": "장소정보질문", "response": "흥선대원군이 머물던 사저로 알려진 곳이니라. 권세와 기록의 기운이 오래 남아 있는 터지."},
             "B": {"role": "스토리정보질문", "response": "글은 권세가 아니라 기억을 남기는 힘이니라. 망각귀는 그 힘부터 지우려 하였지."},
-            "C": {"role": "다음액션진행", "response": "처마 3보를 알고 왔구나. 그럼 처마를 화면에 담아 보거라. 대문이나 처마를 화면에 들이면 먹물 발자국 셋이 첫 글빛으로 이끌 것이니라."},
+            "C": {"role": "다음액션진행", "response": "처마 3보를 알고 왔구나. 그럼 처마를 화면에 담아 보거라. 대문이나 처마를 화면에 들이면 도깨비가 흘린 엽전 세 닢이 첫 글빛으로 이끌 것이니라."},
         },
         "mission": {
             "type": "photo_trail",
             "order": "PHOTO_TRAIL",
             "steps": ["GPS 인증", "AR 카메라 실행", "대문/처마/전통건물 외관 촬영 인증",
-                      "검은 먹물 발자국 등장", "발자국 3개 추적", "먹빛 조각 탭", "퀴즈 정답"],
+                      "도깨비가 흘린 엽전 등장", "엽전 3개 줍기", "먹빛 조각 탭", "퀴즈 정답"],
         },
         "quiz": {
             "question": "이 집의 주인을 알아야 글씨가 모습을 드러내느니. 운현궁과 관련 깊은 인물은 누구더냐?",
             "options": ["세종대왕", "흥선대원군", "이순신"],
             "answer_idx": 1,
         },
-        "objective": {"order": "PHOTO_TRAIL", "hints": ["처마 아래를 살펴보거라", "먹물 발자국 3개를 따라가거라"]},
+        "objective": {"order": "PHOTO_TRAIL", "hints": ["처마 아래를 살펴보거라", "흘린 엽전 3개를 주워 가거라"]},
         "requires": ["clue:처마3보"],
         "requires_mode": "soft",
         "grants": ["fragment:종로_stone_1of5", "clue:溫茶"],
         "clue": "溫茶",
         "clue_text": "먹빛은 찾았으나 아직 글자가 차갑구나. 글은 사람의 온기를 만나야 다시 살아나는 법. 다음 조각은 溫茶, 따뜻한 차의 김 속에서 깨어날 게다.",
-        "success": ["place_verified", "photo_done", "follow:먹물 발자국>=3", "quiz_correct", "tap:먹빛 조각"],
+        "success": ["place_verified", "photo_done", "follow:도깨비 엽전>=3", "quiz_correct", "tap:먹빛 조각"],
         "hint_ladder": {
-            "H1": "발자국은 해 지는 쪽으로 번졌느니",
+            "H1": "엽전은 해 지는 쪽으로 흩어졌느니",
             "H2": "이로당 처마 아래니라",
             "H3": "처마 그늘 왼편, 세 번째 서까래",
             "open_rule": ["fail1|idle60", "idle90", "button"],
         },
-        "garden_reward": {"item": "먹빛 발자국 둘길", "type": "바닥 장식",
-                           "desc": "AR에서 따라갔던 먹물 발자국이 정원 길로 변한 아이템"},
+        "garden_reward": {"item": "엽전 돌길", "type": "바닥 장식",
+                           "desc": "AR에서 주운 도깨비 엽전이 정원 길로 변한 아이템"},
         "codex_npc": "먹 도깨비",
         "codex_condition": "talk1",  # 최소 NPC와의 대화 1회 진행 후 등록
     }
@@ -475,7 +480,7 @@ def build_quest_6_gwanghwamun_finale() -> dict[str, Any]:
         "rewards": {
             "title": "종로의 글빛 복원자",
             "garden_item_final": "종로 글빛 기억석",
-            "garden_items_per_node": ["먹빛 발자국 둘길", "온기 찻상 세트", "붓꽃 화단", "손결 작업대", "처마 등롱"],
+            "garden_items_per_node": ["엽전 돌길", "온기 찻상 세트", "붓꽃 화단", "손결 작업대", "처마 등롱"],
             "unlock": "팔도 기억 지도 — 다음 지역의 기억빛이 희미하게 떠오릅니다.",
         },
     }
