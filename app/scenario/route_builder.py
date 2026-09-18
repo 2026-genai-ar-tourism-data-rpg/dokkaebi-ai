@@ -34,6 +34,10 @@
 #            채움 단계에서는 '드롭'이 아니라 '건너뛰고 다음 후보'라 노드 수는 유지된다.
 # 구현일: 2026-09-12 | 작성: pjh (wish-dupe-search-radius/pjh/v1)
 # 관련: 조치계획 20260912 QA3 · wishlist._coord_match(같은 결함의 앵커 쪽)
+# ------------------------------------------------------------
+# [v5] wishlist_only — 위시 앵커만으로 경로(거리순 채움·비인기 앵커 없음). 앱 위시리스트
+#      '코스 생성'이 고른 장소로만 만들기 위함. 앵커가 좌표 결측으로 빠지면 그만큼 짧아진다.
+# 구현일: 2026-09-19 | 작성: ljs (wishlist-only/ljs/v1)
 # ============================================================
 from app.config import get_settings
 from app.core.logger import get_logger
@@ -50,7 +54,7 @@ def build_route(
     start_x: float | None = None, start_y: float | None = None,
     end_x: float | None = None, end_y: float | None = None,
     wishlist: list | None = None, budget: int | None = None,
-    no_meals: bool = False, lowtraffic_k: int = 0,
+    no_meals: bool = False, lowtraffic_k: int = 0, wishlist_only: bool = False,
 ) -> list[dict]:
     """[노드 선택/배열] 반경 내 거리순 후보(nodes) → 최종 방문 시퀀스(route).
 
@@ -62,6 +66,7 @@ def build_route(
     start_x/y가 없으면 기존 dist_m 순 폴백(behavior preserving).
 
     nodes: location_based_list 결과(이미 거리순, dist_m 포함). count: 기억석 조각 수.
+    wishlist_only=True면 위시 앵커만으로 경로를 짠다 — 거리순 채움·비인기 앵커 없음(count 무시).
     """
     # ⓪ seam 가드: 좌표 없는 후보를 먼저 걸러 낸다. 앵커만 검사하던 v1 가드로는
     #    거리순 채움으로 들어온 좌표 결측 노드가 동선 정렬에서 그대로 터졌다(500).
@@ -70,15 +75,15 @@ def build_route(
     # ① 앵커 수집 — 경로에 '반드시' 들어가야 하는 노드(위시리스트 + 비인기 샛길)
     anchors: list[dict] = []
     anchors += select_wishlist_anchors(nodes, wishlist or [])       # 정찬희 hook
-    if lowtraffic_k:
+    if lowtraffic_k and not wishlist_only:
         anchors += select_lowtraffic_anchors(nodes, lowtraffic_k)   # 이지선 hook
 
     # seam 가드: 좌표(map_x/map_y) 없는 앵커는 동선 배치·거리계산 불가 → 드롭(500 방지).
     # (앱이 위시 좌표를 안 넘긴 경우 등. haversine None 크래시 예방 — kys 통합 책임)
     anchors = _placeable(anchors, what="앵커")
 
-    # ② 앵커 + 가까운 후보로 count개 선택
-    route = _select_count(nodes, anchors, count)
+    # ② 앵커 + 가까운 후보로 count개 선택 — 위시 전용이면 채우지 않는다(고른 장소로만)
+    route = _select_count(nodes, anchors, 0 if wishlist_only else count)
 
     # ③ 동선 정렬: 출발점→경유지→종료점 전체 비용을 기준으로 NN+2-opt 개선.
     route = _order_route(route, start_x, start_y, end_x, end_y)

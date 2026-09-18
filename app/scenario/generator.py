@@ -66,6 +66,10 @@
 #              노출 칸수를 자른다 — QA 재생성이 미션을 새로 만들어도 풀리지 않도록
 #              _run_qa_pass 뒤에 적용한다.
 # 구현일: 2026-09-09 | 작성: pjh (agent-qa/pjh/v1)
+# ------------------------------------------------------------
+# [v8] wishlist_only — 위시 장소로만 코스 구성(앱 퀘스트 탭 위시리스트 '코스 생성'). 조각 수는
+#      고른 장소 수가 되고, 거리순 채움·비인기 샛길·식음 삽입·갈림길을 모두 끈다.
+# 구현일: 2026-09-19 | 작성: ljs (wishlist-only/ljs/v1)
 # ============================================================
 import time
 import asyncio
@@ -188,7 +192,7 @@ async def generate_scenario(req: ScenarioRequest) -> dict:
         end_x=end.lng if end else None, end_y=end.lat if end else None,
         wishlist=req.wishlist, budget=req.budget, no_meals=req.no_meals,
         headcount=headcount, with_branching=req.with_branching,
-        difficulty=req.difficulty, tags=req.tags,
+        difficulty=req.difficulty, tags=req.tags, wishlist_only=req.wishlist_only,
     )
     # 입력 메타 부착(저장·검증용)
     scn["created_by"] = req.user_id
@@ -219,6 +223,7 @@ async def generate_basic_scenario(
     wishlist: list | None = None, budget: int | None = None, no_meals: bool = False,
     headcount: int = 1, with_branching: bool = False,
     difficulty: str = "normal", tags: list[str] | None = None,
+    wishlist_only: bool = False,
 ) -> dict:
     """[거리순 v0] 가까운 N개 관광지로 '기억석 챕터' 생성 + 장소기반 NPC 대사.
     map_x=경도, map_y=위도. end_x/y 주면 끝점에 가장 가까운 노드를 피날레로.
@@ -232,6 +237,11 @@ async def generate_basic_scenario(
     s = get_settings()
     radius_m = radius_m or s.scenario_default_radius_m
     count = count or s.scenario_node_count
+    # 위시 전용(앱 위시리스트 '코스 생성') — 고른 장소로만: 채움·샛길·식음·갈림길 없음.
+    wishlist_only = wishlist_only and bool(wishlist)
+    if wishlist_only:
+        no_meals, with_branching = True, False
+        logger.info("위시 전용 코스: 위시 %d곳으로만 구성(채움·식음·갈림길 없음)", len(wishlist))
     # 1) 반경 내 관광지 거리순 fetch
     nodes = await _tour.location_based_list(map_x, map_y, radius_m, content_type_id=s.scenario_content_type_id)
     if not nodes and not wishlist:
@@ -252,7 +262,7 @@ async def generate_basic_scenario(
         build_route,
         nodes, count=count, start_x=map_x, start_y=map_y, end_x=end_x, end_y=end_y,
         wishlist=wishlist, budget=budget, no_meals=True,
-        lowtraffic_k=s.scenario_lowtraffic_anchors,
+        lowtraffic_k=s.scenario_lowtraffic_anchors, wishlist_only=wishlist_only,
     )
     if not route:
         raise DokkaebiAIError(

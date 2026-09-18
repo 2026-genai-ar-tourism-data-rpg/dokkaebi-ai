@@ -25,6 +25,9 @@
 #            좇을 수 있게 한다. 본문의 user_id를 컨텍스트에 심으면 그 요청에서
 #            파생되는 모든 하위 로그(LLM·TourAPI·시나리오)에 자동으로 붙는다.
 # 구현일: 2026-09-12 | 작성: kys (ops-logging/kys/v1)
+# ------------------------------------------------------------
+# [v6] wishlist_only를 ScenarioRequest로 전달 — 위시 장소로만 코스 구성(앱 위시리스트 '코스 생성').
+# 구현일: 2026-09-19 | 작성: ljs (wishlist-only/ljs/v1)
 # ============================================================
 import asyncio
 import time
@@ -134,6 +137,7 @@ async def scenarios(req: ScenarioGenRequest) -> ScenarioGenResponse:
         with_dialogue=req.with_dialogue,
         with_content=req.with_content,
         with_branching=req.with_branching,
+        wishlist_only=req.wishlist_only,
     )
     scn = await generate_scenario(sreq)
     nodes = scn.get("node_sequence") or []
