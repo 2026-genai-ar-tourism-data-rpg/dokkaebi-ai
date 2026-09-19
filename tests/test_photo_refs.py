@@ -167,6 +167,18 @@ class TestMergeTargets:
 
 @pytest.mark.asyncio
 class TestAttach:
+    @pytest.fixture(autouse=True)
+    def _enable(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "photo_refs_enabled", True)
+
+    async def test_disabled_flag_skips_tourapi_entirely(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "photo_refs_enabled", False)
+        called = []
+        async def fake(*a): called.append(1); return {}
+        monkeypatch.setattr(pr, "build_photo_refs", fake)
+        m = {"type": "PHOTO_FIND", "photo_targets": ["대문"]}
+        assert await pr.attach_photo_refs(m, {"name": "x"}) is m and not called
+
     async def test_merges_llm_and_catalog_and_keeps_llm_copy(self, monkeypatch):
         async def fake(name, cid, overview):
             return {"targets": [{"name": "흥화문", "why": None, "ref_image": "u", "credit": "c", "photo_count": 1}],

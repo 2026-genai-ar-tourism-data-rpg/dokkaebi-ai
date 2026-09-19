@@ -267,6 +267,9 @@ async def attach_photo_refs(mission: dict, node: dict) -> dict:
     """
     if not isinstance(mission, dict) or mission.get("type") not in ("PHOTO_FIND", "PATH_TRACE"):
         return mission
+    if not get_settings().photo_refs_enabled:
+        # 도깨비불 길들이기 전환 후 참조 사진은 쓰이지 않는다 — TourAPI 호출 0으로.
+        return mission
     refs = await build_photo_refs(
         node.get("name") or "", node.get("tour_content_id"), node.get("overview") or "",
     )

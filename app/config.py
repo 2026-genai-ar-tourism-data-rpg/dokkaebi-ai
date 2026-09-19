@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # --- 사진 참조 (photo_refs.py — PHOTO_FIND·PATH_TRACE 타깃·참조사진) ---
     #  갤러리 세부 태그에서 고르는 "찍을 것" 수와, ARKit 참조 후보로 실을 노드 사진 상한.
     #  사진은 앱이 노드 진입 시 내려받으므로 6장이면 수 MB — 더 올리면 첫 진입이 느려진다.
+    #  [fire-capture 2026-09-19] 촬영 미션이 '도깨비불 길들이기'로 바뀌어 참조 사진이 쓰이지 않는다.
+    #  TourAPI 갤러리·이미지 호출을 아끼려고 기본 off. 사진 검증을 되살릴 때 true로.
+    photo_refs_enabled: bool = False
     photo_refs_max_targets: int = 3
     photo_refs_max_images: int = 6
 
