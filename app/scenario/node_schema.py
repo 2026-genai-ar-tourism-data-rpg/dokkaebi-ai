@@ -33,6 +33,13 @@
 # 구현(요약): follow 원자의 기본 object를 "먹물 발자국" → TRAIL_OBJECT_DEFAULT("도깨비 엽전").
 #            node_content의 미션 기본값도 이 상수를 쓴다(단일 출처).
 # 구현일: 2026-09-18 | 작성: ljs (coin-trail/ljs/v1)
+# ------------------------------------------------------------
+# [v5] 단서 = 퀴즈의 귀띔 — 단서가 게임에 쓰이지 않고 이름(三影·三片 등)도 뜻이 없던 문제.
+# 구현(요약): 퀴즈(S3, 보기 3개 이상) 바로 앞 장소만 단서를 준다. 이름은 '<퀴즈 장소> 시험의 귀띔'
+#            (quiz_clue_name), 퀴즈 장소가 soft requires로 요구한다. 앱은 이 단서를 가진 채 퀴즈에
+#            오면 오답 하나를 지워 준다. 다른 장소 사이의 단서·requires는 더 만들지 않는다.
+#            다음 노드 미션에서 이름을 유도하던 derive_clue_name과 그 전용 보조(_HANJA_NUM 등)는 제거.
+# 구현일: 2026-09-19 | 작성: ljs (quiz-clue/ljs/v1)
 # ============================================================
 from __future__ import annotations
 
@@ -98,7 +105,7 @@ _MISSION_ORDER: tuple[str, ...] = (
     "COLLECT", "DIALOGUE_FIND", "FIND", "QUIZ_FIND",
 )
 
-# 단서설계규칙.md 예시 열 — derive가 재료 부족으로 유도 못 할 때의 폴백 풀.
+# 단서설계규칙.md 예시 열 — 하위호환 choose_clue_name의 풀(v5부터 링크 경로는 quiz_clue_name).
 CLUE_NAMES_BY_STRATEGY: dict[str, tuple[str, ...]] = {
     "S1_TALK_GATHER": ("전언", "첫 글자", "잃은 이름"),
     "S2_HUNT_GATHER": ("五影", "붉은 실", "처마 매듭"),
@@ -674,90 +681,38 @@ def build_success(actions: list[dict[str, Any]], *, is_food: bool) -> list[str]:
     return _unique(success)
 
 
-# ── ④ 단서 체인 — 이름은 다음 노드의 수행 조건에서 유도 + 유일성 보장 ────
+# ── ④ 단서 — 퀴즈 바로 앞 장소가 그 퀴즈의 귀띔을 준다(v5) ────────────
 
-_HANJA_NUM = {1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "七", 8: "八", 9: "九"}
-_CHOSEONG = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"
-
-
-def _choseong_of(text: str) -> str | None:
-    """정답 첫 글자의 초성(단서설계규칙 S3: '자음/모음/한자/숫자')."""
-    for ch in text:
-        code = ord(ch)
-        if 0xAC00 <= code <= 0xD7A3:
-            return _CHOSEONG[(code - 0xAC00) // 588]
-        if ch.isdigit():
-            return _HANJA_NUM.get(int(ch))
-        if ch.strip():
-            return ch
-    return None
+# 보기가 이보다 적으면 오답 하나를 지웠을 때 정답이 그대로 드러난다 — 그런 퀴즈엔 단서를 달지 않는다.
+QUIZ_CLUE_MIN_OPTIONS = 3
 
 
-def derive_clue_name(target: dict[str, Any], used: set[str] | None = None) -> str:
-    """단서설계규칙.md 준수 — "단서가 실제 수행 조건으로 쓰임".
+def is_quiz_target(node: dict[str, Any]) -> bool:
+    """앱이 퀴즈 화면으로 보내는 노드(S3)이고, 오답 하나를 지워도 될 만큼 보기가 있는가."""
+    quiz = node.get("quiz") if isinstance(node.get("quiz"), dict) else {}
+    return (
+        _first_strategy(node) == "S3_RIDDLE_UNLOCK"
+        and len(_string_list(quiz.get("options"))) >= QUIZ_CLUE_MIN_OPTIONS
+    )
 
-    다음 노드(target)의 전략별로 이름이 알려줘야 하는 것을 미션 데이터에서 유도:
-    - S2 요괴 수 → 五影 / - S3 정답 일부 → 초성·한자 / - S4 엽전 수·대상 → 대문 三보
-    - S5 촬영 대상 → 현판 / - S6 개수 → 三片 / - S1 전언 키워드
-    유도 재료가 없으면 규칙 문서의 예시 풀에서 결정적으로 선택. `used`로 시나리오 내
-    유일성을 보장한다(충돌 시 풀 순회 → 숫자 접미).
+
+def quiz_clue_name(target: dict[str, Any], used: set[str] | None = None) -> str:
+    """퀴즈 장소 [target]의 귀띔 이름 — 읽으면 어디에 쓰는지 알도록 '<장소> 시험의 귀띔'.
+
+    앱은 이 단서를 가진 채 그 퀴즈에 오면 오답 하나를 지워 준다. `used`로 시나리오 안 유일성.
     """
     used = used or set()
-    strategy = _first_strategy(target)
-    mission = target.get("mission") if isinstance(target.get("mission"), dict) else {}
-    quiz = target.get("quiz") if isinstance(target.get("quiz"), dict) else {}
-
-    derived: str | None = None
-    if strategy == "S2_HUNT_GATHER":
-        count = _safe_int(mission.get("count"), default=0)
-        if count and count in _HANJA_NUM:
-            derived = f"{_HANJA_NUM[count]}影"
-    elif strategy == "S3_RIDDLE_UNLOCK":
-        answer = _quiz_answer_text(quiz) or _quiz_answer_text(
-            mission if "options" in mission else {}
-        )
-        derived = _choseong_of(answer) if answer else None
-    elif strategy == "S4_PHOTO_TRAIL":
-        steps = _string_list(mission.get("steps"))
-        n = len(steps) or 3
-        targets = _string_list(mission.get("photo_targets"))
-        head = (targets[0][:2] if targets else "자취")
-        if n in _HANJA_NUM:
-            derived = f"{head} {_HANJA_NUM[n]}보"
-    elif strategy == "S5_PHOTO_PROOF":
-        targets = _string_list(mission.get("photo_targets"))
-        if targets:
-            derived = targets[0][:4]
-    elif strategy == "S6_ACCUMULATE":
-        items = _string_list(mission.get("items")) or _string_list(mission.get("parts"))
-        count = len(items) or _safe_int(mission.get("count"), default=0)
-        if count and count in _HANJA_NUM:
-            derived = f"{_HANJA_NUM[count]}片"
-    elif strategy == "S1_TALK_GATHER":
-        find = _clean_optional_string(mission.get("find"))
-        if find:
-            derived = f"{find[:2]} 전언"
-
-    candidates: list[str] = []
-    if derived:
-        candidates.append(derived[:5].strip())
-    pool = CLUE_NAMES_BY_STRATEGY.get(strategy) or CLUE_NAMES_BY_STRATEGY["S1_TALK_GATHER"]
-    seed = str(target.get("node_id") or "")
-    digest = hashlib.sha256(f"{strategy}|{seed}".encode("utf-8")).digest()
-    candidates.extend(pool[(digest[0] + i) % len(pool)] for i in range(len(pool)))
-
-    for name in candidates:
-        if name and name not in used:
-            return name
-    base = candidates[0] or "단서"
-    n = 2
-    while f"{base}·{n}" in used:
+    place = str(target.get("name") or "").strip() or "다음 장소"
+    base = f"{place} 시험의 귀띔"
+    name, n = base, 2
+    while name in used:
+        name = f"{base}·{n}"
         n += 1
-    return f"{base}·{n}"
+    return name
 
 
 def choose_clue_name(target_strategy: str, seed: str) -> str:
-    """(하위호환) 전략 풀에서 결정적 선택 — 신규 경로는 derive_clue_name 사용."""
+    """(하위호환) 전략 풀에서 결정적 선택 — 신규 경로는 quiz_clue_name 사용."""
     candidates = CLUE_NAMES_BY_STRATEGY.get(target_strategy) or CLUE_NAMES_BY_STRATEGY["S1_TALK_GATHER"]
     digest = hashlib.sha256(f"{target_strategy}|{seed}".encode("utf-8")).digest()
     return candidates[digest[0] % len(candidates)]
@@ -770,6 +725,7 @@ def link_state_graph(node_sequence: list[dict[str, Any]]) -> list[dict[str, Any]
     - path_id=b1 샛길은 본선 대체 경로이므로 피날레 전량 requires에 넣지 않는다.
     - 분기 트리의 세부 보상 동치화는 #24 route_tree 담당 범위이며, 여기서는 본선 계약을 보존한다.
     - v3: 단서 이름은 다음 노드의 수행 조건에서 유도(derive_clue_name), 시나리오 내 유일.
+    - v5: 단서는 퀴즈(S3) 바로 앞 장소만 준다 — '<장소> 시험의 귀띔'(quiz_clue_name), 시나리오 내 유일.
     """
     sequence = copy.deepcopy(node_sequence)
     main_stones = [
@@ -782,17 +738,18 @@ def link_state_graph(node_sequence: list[dict[str, Any]]) -> list[dict[str, Any]
 
     used_clues: set[str] = set()
     for current, target in zip(non_finale, main_stones[1:]):
-        clue = derive_clue_name(target, used_clues)
+        # 단서는 다음 장소가 퀴즈일 때만 준다 — 그 퀴즈에서 오답 하나를 지우는 귀띔.
+        # 피날레는 조각 전량만 hard requires로 쓰므로 단서 대상이 아니다.
+        if target.get("is_finale") or not is_quiz_target(target):
+            continue
+        clue = quiz_clue_name(target, used_clues)
         used_clues.add(clue)
         clue_ref = f"clue:{clue}"
 
-        # 마지막 일반 노드의 단서도 단서함 카드로 지급한다.
-        # 피날레는 조각 전량만 hard requires로 사용하므로 단서를 requires에 넣지는 않는다.
         current["clue"] = clue
         current["grants"] = _append_unique(_string_list(current.get("grants")), clue_ref)
-        if not target.get("is_finale"):
-            target["requires"] = _append_unique(_string_list(target.get("requires")), clue_ref)
-            target["requires_mode"] = "soft"
+        target["requires"] = _append_unique(_string_list(target.get("requires")), clue_ref)
+        target["requires_mode"] = "soft"
 
     if finale is not None:
         fragment_refs = []
