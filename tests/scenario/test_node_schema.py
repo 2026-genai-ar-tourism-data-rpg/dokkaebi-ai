@@ -4,6 +4,10 @@
 #       ③ 역사서술 오버라이드 억제·cat 코드 ④ 단서 유도·유일성(단서설계규칙.md)
 #       ⑤ NPC 합성(8-B) ⑥ QA 조사 스트리핑 + 기존 앱 계약 정합(유지)
 # 구현일: 2026-07-30 | 작성: pjh (node-schema-gen/pjh/v1)
+# ------------------------------------------------------------
+# [v3] ④ 단서 = 퀴즈의 귀띔 — 퀴즈 바로 앞 장소만 '<장소> 시험의 귀띔'을 주고 퀴즈가 요구한다.
+#      퀴즈가 아니거나(보기 3개 미만 포함) 첫 장소가 퀴즈면 단서 없음.
+# 구현일: 2026-09-19 | 작성: ljs (quiz-clue/ljs/v1)
 # ============================================================
 from __future__ import annotations
 
@@ -16,10 +20,10 @@ from app.scenario.node_schema import (
     MISSION_TO_STRATEGIES,
     NodeContractError,
     choose_clue_name,
-    derive_clue_name,
     enrich_quest,
     infer_motivations,
     link_state_graph,
+    quiz_clue_name,
     reroll_strategy,
     run_qa,
     select_mission_type,
@@ -328,35 +332,52 @@ def test_npc_finale_is_guardian_and_food_gets_food_motif():
 # ── ④ 단서 — 수행 조건 유도 + 유일성 (단서설계규칙.md) ─────────────────
 
 
-def test_clue_is_derived_from_target_requirement():
-    # S3: 정답 일부(초성) — "흥선대원군" → ㅎ
-    s3 = _stone("n_s3", "조각", "S3_RIDDLE_UNLOCK")
-    s3["quiz"] = {"q": "?", "options": ["세종대왕", "흥선대원군"], "answer": 1}
-    assert derive_clue_name(s3) == "ㅎ"
-    # S2: 요괴 수 — count 5 → 五影
-    s2 = _stone("n_s2", "조각", "S2_HUNT_GATHER")
-    s2["mission"] = {"type": "HUNT", "count": 5}
-    assert derive_clue_name(s2) == "五影"
-    # S6: 개수 — 부재 3개 → 三片
-    s6 = _stone("n_s6", "조각", "S6_ACCUMULATE")
-    s6["mission"] = {"type": "RESTORE_AR", "parts": ["주춧돌", "기둥", "지붕 부재"]}
-    assert derive_clue_name(s6) == "三片"
-    # S5: 촬영 대상
-    s5 = _stone("n_s5", "조각", "S5_PHOTO_PROOF")
-    s5["mission"] = {"type": "PHOTO_FIND", "photo_targets": ["현판"]}
-    assert derive_clue_name(s5) == "현판"
+def _quiz_stone(node_id: str, fragment_id: str, *, options: int = 4, name: str | None = None) -> dict:
+    node = _stone(node_id, fragment_id, "S3_RIDDLE_UNLOCK")
+    node["quiz"] = {"q": "?", "options": [f"보기{i}" for i in range(options)], "answer": 1}
+    if name:
+        node["name"] = name
+    return node
 
 
-def test_clue_names_are_unique_within_scenario():
-    # 같은 전략·같은 미션 데이터가 반복돼도 시나리오 안에서 이름이 겹치지 않는다.
-    stones = [_stone(f"n{i}", f"조각{i}", "S3_RIDDLE_UNLOCK") for i in range(1, 5)]
+def test_quiz_clue_goes_only_to_place_right_before_quiz():
+    n1 = _stone("n1", "글씨조각1", "S4_PHOTO_TRAIL")
+    n2 = _quiz_stone("n2", "글씨조각2", name="경복궁")
+    n3 = _stone("n3", "글씨조각3", "S2_HUNT_GATHER")
+    finale = _stone("nf", "글씨조각f", "S6_ACCUMULATE", finale=True)
+    by_id = {n["node_id"]: n for n in link_state_graph([n1, n2, n3, finale])}
+
+    assert by_id["n1"]["clue"] == "경복궁 시험의 귀띔"
+    assert "clue:경복궁 시험의 귀띔" in by_id["n1"]["grants"]
+    assert "clue:경복궁 시험의 귀띔" in by_id["n2"]["requires"]
+    assert by_id["n2"]["requires_mode"] == "soft"
+    # 퀴즈가 아닌 장소 앞에는 단서가 없다
+    assert by_id["n2"]["clue"] is None and by_id["n3"]["clue"] is None
+    assert not any(r.startswith("clue:") for r in by_id["n3"]["requires"])
+    assert by_id["n3"]["requires_mode"] == "none"
+
+
+def test_no_quiz_clue_for_first_place_or_quiz_with_too_few_options():
+    first = _quiz_stone("q1", "글씨조각1")
+    n2 = _stone("n2", "글씨조각2", "S4_PHOTO_TRAIL")
+    two_options = _quiz_stone("q3", "글씨조각3", options=2)
+    finale = _stone("nf", "글씨조각f", "S6_ACCUMULATE", finale=True)
+    linked = link_state_graph([first, n2, two_options, finale])
+
+    assert [n["clue"] for n in linked] == [None, None, None, None]
+    assert not any(r.startswith("clue:") for n in linked for r in n["grants"] + n["requires"])
+
+
+def test_quiz_clue_names_are_unique_within_scenario():
+    assert quiz_clue_name({"name": "경복궁"}, {"경복궁 시험의 귀띔"}) == "경복궁 시험의 귀띔·2"
+    stones = [_stone("n0", "조각0", "S4_PHOTO_TRAIL")]
+    stones += [_quiz_stone(f"n{i}", f"조각{i}", name="같은 이름") for i in range(1, 4)]
     finale = _stone("nf", "조각f", "S6_ACCUMULATE", finale=True)
-    linked = link_state_graph([*stones, finale])
-    clues = [n["clue"] for n in linked if n["clue"]]
-    assert len(clues) == len(set(clues)) == 4
+    clues = [n["clue"] for n in link_state_graph([*stones, finale]) if n["clue"]]
+    assert len(clues) == len(set(clues)) == 3
 
 
-def test_clue_is_string_and_links_only_between_main_stones():
+def test_quiz_clue_skips_food_between_giver_and_quiz():
     n1 = _stone("n1", "글씨조각1", "S4_PHOTO_TRAIL")
     food = enrich_quest(
         {
@@ -372,28 +393,25 @@ def test_clue_is_string_and_links_only_between_main_stones():
         },
         {"content_type_id": 39},
     )
-    n2 = _stone("n2", "글씨조각2", "S3_RIDDLE_UNLOCK")
+    n2 = _quiz_stone("n2", "글씨조각2")
     finale = _stone("n3", "글씨조각3", "S6_ACCUMULATE", finale=True)
 
     linked = link_state_graph([n1, food, n2, finale])
     by_id = {node["node_id"]: node for node in linked}
 
-    assert isinstance(by_id["n1"]["clue"], str)
     assert f"clue:{by_id['n1']['clue']}" in by_id["n1"]["grants"]
     assert f"clue:{by_id['n1']['clue']}" in by_id["n2"]["requires"]
-    assert by_id["n2"]["requires_mode"] == "soft"
     assert by_id["food"]["grants"] == []
     assert by_id["food"]["requires"] == []
 
 
-def test_last_nonfinal_also_gets_clue_card_but_finale_does_not_require_it():
+def test_last_nonfinal_gets_no_clue_and_finale_does_not_require_one():
     n1 = _stone("n1", "글씨조각1", "S4_PHOTO_TRAIL")
-    n2 = _stone("n2", "글씨조각2", "S3_RIDDLE_UNLOCK")
+    n2 = _quiz_stone("n2", "글씨조각2")
     finale = _stone("n3", "글씨조각3", "S6_ACCUMULATE", finale=True)
     linked = link_state_graph([n1, n2, finale])
 
-    assert linked[1]["clue"] is not None
-    assert any(state.startswith("clue:") for state in linked[1]["grants"])
+    assert linked[1]["clue"] is None
     assert not any(state.startswith("clue:") for state in linked[2]["requires"])
 
 
