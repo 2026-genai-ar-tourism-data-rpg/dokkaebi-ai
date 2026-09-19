@@ -70,6 +70,9 @@
 # [v8] wishlist_only — 위시 장소로만 코스 구성(앱 퀘스트 탭 위시리스트 '코스 생성'). 조각 수는
 #      고른 장소 수가 되고, 거리순 채움·비인기 샛길·식음 삽입·갈림길을 모두 끈다.
 # 구현일: 2026-09-19 | 작성: ljs (wishlist-only/ljs/v1)
+# ------------------------------------------------------------
+# [v9] 식음 노드 출력에서 상권 쿠폰(coupon) 필드 제거 — 쿠폰 보상을 없앴다.
+# 구현일: 2026-09-19 | 작성: ljs (coupon-affinity/ljs/v1)
 # ============================================================
 import time
 import asyncio
@@ -642,7 +645,6 @@ def _build_food_quest(node: dict, order: int, dialogue: str, trigger_radius_m: i
         "dist_m": node.get("dist_m"),
         "price_band": node.get("price_band") or node.get("band"),
         "price_band_label": node.get("price_band_label"),
-        "coupon": node.get("coupon"),                    # 상권 쿠폰(food hook 부착)
         "source": node.get("source"),
         "out_of_radius": node.get("out_of_radius"),
         "mission": None,

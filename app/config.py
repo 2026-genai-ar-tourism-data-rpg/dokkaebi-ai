@@ -3,6 +3,9 @@
 # pipeline: 공통 인프라 (전 모듈이 참조)
 # 구현(요약): 앱/LLM 동시성(세마포어)·재시도·백오프·지역캐시 설정값 + 싱글톤 로더
 # 구현일: 2026-06-10 | 작성: kys (base-pipeline/kys/v1)
+# ------------------------------------------------------------
+# [v2] 쿠폰 금액 설정(scenario_quiz_coupon·choice_coupon·food_coupon) 제거 — 쿠폰 보상을 없앴다.
+# 구현일: 2026-09-19 | 작성: ljs (coupon-affinity/ljs/v1)
 # ============================================================
 from functools import lru_cache
 
@@ -131,9 +134,6 @@ class Settings(BaseSettings):
     # 노드 선택 hook 스위치(build_route) — 0=off면 기존 거리순 동작 그대로
     scenario_lowtraffic_anchors: int = 0  # 비인기 앵커(샛길) 강제포함 수 — 박준형 EDA 후 >0
     scenario_food_per_route: int = 0      # 경로당 삽입할 카페/식당 수 — 정찬희 실데이터 후 >0
-    scenario_quiz_coupon: int = 200       # 퀴즈 정답 쿠폰; 경험치는 서버가 지급
-    scenario_choice_coupon: int = 100     # 보상 선택지 쿠폰
-    scenario_food_coupon: int = 500       # 식음 영수증 인증 쿠폰(mock)
     # 위시(가고싶은 곳) 좌표 매칭 반경(m) — content_id가 달라도 이만큼 가까우면 같은 장소로 본다.
     #  TourAPI가 한 장소를 여러 콘텐츠로 등록해(예: 종묘 126510 / 종묘광장공원 126492, 67m)
     #  content_id만 비교하면 같은 곳이 앵커·후보로 두 번 들어간다.

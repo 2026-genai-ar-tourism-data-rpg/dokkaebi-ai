@@ -18,6 +18,9 @@
 # 구현(요약): 운현궁 노드의 단서 문구·follow 대상·힌트·정원 보상 이름을 엽전으로. 단서 키
 #            '처마 3보'는 다음 노드 requires와 이어져 있어 그대로 둔다.
 # 구현일: 2026-09-18 | 작성: ljs (coin-trail/ljs/v1)
+# ------------------------------------------------------------
+# [v4] 쿠폰 보상 제거 — 익선동 노드의 쿠폰 지급(coupon:인사동:1000)·쿠폰 사용 단계·예산 쿠폰 차감.
+# 구현일: 2026-09-19 | 작성: ljs (coupon-affinity/ljs/v1)
 # ============================================================
 from typing import Any
 
@@ -228,15 +231,15 @@ def build_quest_2_ikseondong() -> dict[str, Any]:
         "mission": {
             "type": "purchase_ar",
             "order": "PATRONIZE_AR",
-            "steps": ["노드 반경 진입", "따뜻한 음료 주문 인증", "쿠폰 500원 사용",
+            "steps": ["노드 반경 진입", "따뜻한 음료 주문 인증",
                       "AR 카메라로 찻잔/테이블 확인", "찻잔 김 사이 조각 탭", "완료 보고"],
         },
         "quiz": None,  # PDF: 이 노드는 AR 탐색만, 퀴즈 없음
         "objective": {"order": "PATRONIZE_AR", "hints": ["따뜻한 음료를 주문해 보거라", "찻잔의 김을 비추어 보거라"]},
-        "budget": {"expected": 6000, "coupon": -500, "actual": 5500, "note": "익선동 음료 — 운현궁 보상쿠폰 사용"},
+        "budget": {"expected": 6000, "actual": 6000, "note": "익선동 음료"},
         "requires": ["clue:溫茶"],
         "requires_mode": "soft",
-        "grants": ["fragment:종로_stone_2of5", "clue:三墨", "coupon:인사동:1000"],
+        "grants": ["fragment:종로_stone_2of5", "clue:三墨"],
         "clue": "三墨",
         "clue_text": "찻잔의 김 속에서 획 하나가 깨어났구나. 하지만 붓끝은 아직 셋으로 흩어져 있다. 골목의 글씨 사이에 숨은 三墨을 찾아야 하느니라.",
         "success": ["place_verified", "purchase_verified", "tap:온기 조각"],

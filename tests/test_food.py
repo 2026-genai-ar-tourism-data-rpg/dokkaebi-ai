@@ -129,6 +129,7 @@ def test_golden_anguk_20000_solo():
     assert out[-1]["node_id"] == "tour_gwang"                # 피날레 맨 뒤 유지 ⚠️핵심
     assert all("fragment_id" not in n for n in food_nodes)   # 기억석 필드 미부여
     assert all(n["price_band"] <= 2 for n in food_nodes)     # 목표 밴드 초과 없음
+    assert all("coupon" not in n for n in food_nodes)        # 상권 쿠폰 없음(coupon-affinity/ljs/v1)
 
 def test_golden_same_budget_more_people_downgrades():
     """같은 2만원인데 6명 → 1인 3,333원 → 카페(₩)만, 식사 노드 없음."""

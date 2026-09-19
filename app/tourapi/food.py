@@ -23,6 +23,9 @@
 #      좌표 없는 후보 1개가 attach_price_bands에서 터지면 gather가 통째로 실패해
 #      실데이터 후보 전체가 mock으로 조용히 폴백되던 문제(실키 투입 시 발현).
 # 구현일: 2026-08-12 | 작성: pjh (ai-logic-fix/pjh/v2)
+# ------------------------------------------------------------
+# [v5] 삽입한 식음 노드에 붙이던 상권 쿠폰(coupon) 제거 — 쿠폰 보상을 없앴다.
+# 구현일: 2026-09-19 | 작성: ljs (coupon-affinity/ljs/v1)
 # ============================================================
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -298,8 +301,7 @@ def interleave_food(route: list[dict], *, budget: int | None = None,
         if choice is None:
             continue
         used_ids.add(choice["node_id"])
-        node = {**choice, "coupon": {"to_kind": "food", "amount": get_settings().scenario_food_coupon}}
-        picked.append((ins_idx, node))
+        picked.append((ins_idx, dict(choice)))
 
     if not picked:
         logger.info("예산 %s원/%d인 목표밴드 %s 후보 없음 — 삽입 생략",
@@ -376,10 +378,7 @@ async def interleave_food_async(route: list[dict], *, budget: int | None = None,
         if choice is None:
             continue
         used_ids.add(choice["node_id"])
-        picked.append((ins_idx, {
-            **choice,
-            "coupon": {"to_kind": "food", "amount": get_settings().scenario_food_coupon},
-        }))
+        picked.append((ins_idx, dict(choice)))
 
     if not picked:
         return route
