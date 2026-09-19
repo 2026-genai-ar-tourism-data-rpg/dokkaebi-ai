@@ -27,6 +27,9 @@ from app.scenario.node_schema import (
     reroll_strategy,
     run_qa,
     select_mission_type,
+    select_mission_types_for_course,
+    pick_balanced_mission_type,
+    app_quest_of,
     select_strategies,
     strategy_is_valid,
     synthesize_npc,
@@ -523,3 +526,73 @@ def test_qa_stopword_survives_particle_stripping():
     node["npc_dialogue"] = "도깨비로 살아온 세월이 길구나, 허허."
     qa = run_qa(node, _source())
     assert "도깨비" not in qa["unsupported_tokens"]
+
+
+# ── [v5] 코스 단위 골고루 배정 ──────────────────────────────────────
+
+def _course_metas(n: int, food_at: tuple[int, ...] = ()) -> list[dict]:
+    last = max(i for i in range(n) if i not in food_at)
+    metas, sn = [], 0
+    for i in range(n):
+        if i in food_at:
+            metas.append({"is_food": True, "is_finale": False, "stone_index": None})
+        else:
+            metas.append({"is_food": False, "is_finale": i == last, "stone_index": sn})
+            sn += 1
+    return metas
+
+
+def _quests(types, mvs, metas):
+    return [None if t is None else app_quest_of(t, mv, is_finale=m["is_finale"])
+            for t, mv, m in zip(types, mvs, metas)]
+
+
+def test_course_assignment_alternates_app_quests_and_never_repeats_consecutively():
+    # M1만 있는 유적 코스 — 예전엔 2·3번째가 연속 도깨비불. 이제 도깨비불/빛 순서가 번갈아 온다.
+    mvs = [["M1"]] * 5
+    metas = _course_metas(5)
+    types = select_mission_types_for_course(mvs, metas)
+    quests = _quests(types, mvs, metas)
+    assert types[-1] == "DIALOGUE_COLLECT"
+    body = quests[:-1]
+    assert all(a != b for a, b in zip(body, body[1:])), body
+    assert body.count("fire") == 2 and body.count("gather") == 2
+    # 같은 퀘스트 묶음 안에서도 미션 타입(지령 문구)은 돌아간다
+    assert len({t for t, q in zip(types, quests) if q == "fire"}) == 2
+    assert len({t for t, q in zip(types, quests) if q == "gather"}) >= 2
+
+
+def test_course_assignment_prefers_least_used_quest_so_quiz_and_hunt_show_up_early():
+    mvs = [["M2", "M1"], ["M1"], ["M1"], ["M1", "M7"], ["M1"]]
+    metas = _course_metas(5)
+    types = select_mission_types_for_course(mvs, metas)
+    quests = _quests(types, mvs, metas)[:-1]
+    assert quests[0] == "hunt"                    # M2가 허용한 사냥은 첫 자리에서 바로
+    assert "quiz" in quests                       # M7 노드는 덜 쓴 퀴즈를 받는다(예전엔 7번째여야 나왔다)
+    assert len(set(quests)) == 4
+
+
+def test_course_assignment_keeps_motivation_constraints_and_food_finale_rules():
+    mvs = [["M1"], ["M6"], ["M3"], ["M1", "M9"], ["M7"], ["M1"]]
+    metas = _course_metas(6, food_at=(1,))
+    types = select_mission_types_for_course(mvs, metas)
+    assert types[1] is None and types[-1] == "DIALOGUE_COLLECT"
+    for t, mv, m in zip(types, mvs, metas):
+        if t is None or m["is_finale"]:
+            continue
+        strategies = select_strategies(mv, t)
+        assert strategies and all(strategy_is_valid(s, mv) for s in strategies), (t, mv)
+    assert app_quest_of(types[2], ["M3"]) == "fire"    # M3만 = 도깨비불뿐(제약표) — 이웃이 피한다
+    assert app_quest_of(types[3], ["M1", "M9"]) != "fire"
+    assert app_quest_of(types[4], ["M7"]) == "quiz"
+
+
+def test_branch_pick_avoids_both_neighbours_when_possible():
+    from collections import Counter
+    t = pick_balanced_mission_type(["M1"], counts=Counter({"fire": 1, "gather": 1}),
+                                   prev_quest="fire", next_quest="fire", stone_index=1)
+    assert app_quest_of(t, ["M1"]) == "gather"
+    t = pick_balanced_mission_type(["M1"], counts=Counter({"fire": 1, "gather": 2}),
+                                   prev_quest="gather", next_quest="gather", stone_index=1)
+    assert app_quest_of(t, ["M1"]) == "fire"
+

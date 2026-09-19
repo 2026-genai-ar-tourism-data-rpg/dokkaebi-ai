@@ -74,6 +74,7 @@
 import time
 import asyncio
 import hashlib
+from collections import Counter
 from app.config import get_settings
 from app.core.exceptions import DokkaebiAIError
 from app.core.logger import get_logger
@@ -101,6 +102,9 @@ from app.scenario.node_schema import (
     infer_motivations,
     link_state_graph,
     select_mission_type,
+    select_mission_types_for_course,
+    pick_balanced_mission_type,
+    STRATEGY_TO_APP_QUEST,
     synthesize_npc,
 )
 from app.scenario.prologue_content import fallback_prologue, generate_prologue
@@ -312,10 +316,13 @@ async def generate_basic_scenario(
     )
     # 생성 중 발생한 사람이 읽을 문제(미션 폴백·QA 미해결)를 모아 응답으로 내보낸다.
     qa_flags: list[str] = []
-    # 노드마다 미션 타입을 다양화: 동기가 허용하는 전략의 미션만 순환 배정. 식음노드는 미션 없음(None)
+    # [v5] 미션 타입은 코스 단위로 먼저 정한다 — 앱 퀘스트(도깨비불/빛 순서/사냥/퀴즈) 기준으로
+    #      덜 쓴 것 우선·연속 회피(가볍고 결정적). 콘텐츠 생성은 그대로 병렬. 식음노드는 미션 없음(None)
+    mission_types = select_mission_types_for_course(list(motivations_list), metas)
     if with_content:
         missions = await asyncio.gather(
-            *[_content_for(n, m, mv, qa_flags) for n, m, mv in zip(route, metas, motivations_list)]
+            *[_content_for(n, m, mv, qa_flags, mission_type=mt)
+              for n, m, mv, mt in zip(route, metas, motivations_list, mission_types)]
         )
         # ⚠️ 난이도 절단은 여기서 하지 않는다(v7). 미션 hints를 먼저 자르면 그걸 재료로
         #    만드는 hint_ladder의 H2가 범용 폴백으로 떨어져, '힌트를 줄이는' 대신
@@ -408,7 +415,17 @@ async def _apply_branching(
         sources[alt_src["node_id"]] = alt_src      # QA 루프가 이 노드의 grounding을 찾을 수 있게
     alt_dialogue = await _dialogue_for(alt_src, alt_meta) if with_dialogue else _fixed(alt_src, alt_meta)
     alt_motivations = await _motivations_for(alt_src, alt_meta)   # [v3] 동기 → 미션 타입 순서 유지
-    alt_mission = await _content_for(alt_src, alt_meta, alt_motivations, flags) if with_content else None
+    # [v5] 샛길도 코스 균형에 맞춘다 — 본선에서 덜 쓴 퀘스트, 갈림길 앞뒤(bp_i·bp_i+2)와 다른 퀘스트.
+    course_quests = [_quest_of_node(q) for q in node_sequence]
+    alt_type = pick_balanced_mission_type(
+        alt_motivations,
+        counts=Counter(q for q in course_quests if q),
+        prev_quest=course_quests[bp_i] if bp_i < len(course_quests) else None,
+        next_quest=course_quests[bp_i + 2] if bp_i + 2 < len(course_quests) else None,
+        stone_index=max(0, bp_i),
+    )
+    alt_mission = (await _content_for(alt_src, alt_meta, alt_motivations, flags, mission_type=alt_type)
+                   if with_content else None)
     # 난이도 절단은 본선과 같은 자리(사다리 완성 후)에서 한 번에 한다 — v7.
     alt_quest = _build_branch_quest(alt_src, len(node_sequence), region, alt_dialogue,
                                     alt_mission, motivations=alt_motivations,
@@ -502,8 +519,17 @@ async def _motivations_for(node: dict, meta: dict) -> list[str]:
     return list(dict.fromkeys(codes))[:2]
 
 
+def _quest_of_node(quest: dict) -> str | None:
+    """조립된 퀘스트가 앱에서 어떤 퀘스트 화면인지(strategy[0] 코드) — 샛길 균형 계산용."""
+    strategies = quest.get("strategy") or []
+    if not strategies:
+        return None
+    return STRATEGY_TO_APP_QUEST.get(str(strategies[0]).split("_")[0])
+
+
 async def _content_for(node: dict, meta: dict, motivations: list[str],
-                       flags: list[str] | None = None) -> dict | None:
+                       flags: list[str] | None = None, *,
+                       mission_type: str | None = None) -> dict | None:
     """관광 노드 미션 생성(타입별 다양화). 식음노드는 기억석 미션 없음(None).
     실패해도 시나리오 안 막음(폴백 보장).
     [v3 #30] 미션 타입은 동기가 허용하는 전략의 것만 순환 — 텍스트↔액션 정합 보장.
@@ -516,7 +542,9 @@ async def _content_for(node: dict, meta: dict, motivations: list[str],
     if meta["is_food"]:
         return None                        # 식음노드 = 경유/보상, 기억석 미션 아님
     name, overview = node.get("name") or "이곳", node.get("overview") or ""
-    mtype = select_mission_type(
+    # [v5] 코스 단위 균형 배정(select_mission_types_for_course)이 준 타입을 쓴다.
+    #      단독 호출(테스트·하위호환)엔 예전 인덱스 순환.
+    mtype = mission_type or select_mission_type(
         motivations, meta["stone_index"] or 0,
         is_finale=meta["is_finale"], is_food=False,
     )

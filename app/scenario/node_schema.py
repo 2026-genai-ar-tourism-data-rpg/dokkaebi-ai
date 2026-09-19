@@ -40,12 +40,22 @@
 #            오면 오답 하나를 지워 준다. 다른 장소 사이의 단서·requires는 더 만들지 않는다.
 #            다음 노드 미션에서 이름을 유도하던 derive_clue_name과 그 전용 보조(_HANJA_NUM 등)는 제거.
 # 구현일: 2026-09-19 | 작성: ljs (quiz-clue/ljs/v1)
+# ------------------------------------------------------------
+# [v5] 코스 단위 골고루 배정 (퀘스트_배정_현황과_골고루_배정_제안 B안, 2026-09-19).
+# 구현(요약): select_mission_types_for_course — 앱이 실제로 보여주는 퀘스트(strategy[0] 기준:
+#            fire=도깨비불 / gather=빛 순서 / hunt=요괴 사냥 / quiz=퀴즈)로 코스 안 사용 횟수를 세고,
+#            각 장소에 허용된 미션 중 덜 쓴 퀘스트를 먼저, 직전 장소와 같은 퀘스트는 피한다.
+#            동기↔전략 제약은 그대로(허용 목록 안에서만 고른다). 같은 퀘스트 묶음 안에서는
+#            stone_index로 미션 타입을 돌려 지령 문구도 다양하게. 이전 방식(select_mission_type,
+#            인덱스 순환)은 하위호환·단일 노드용으로 남긴다.
+# 구현일: 2026-09-19 | 작성: kys (fire-capture/kys/v1)
 # ============================================================
 from __future__ import annotations
 
 import copy
 import hashlib
 import re
+from collections import Counter
 from collections.abc import Iterable
 from typing import Any
 
@@ -334,6 +344,94 @@ def select_mission_type(
     if not allowed_types:                     # 방어 — M1 폴백과 동일한 최후 안전망
         allowed_types = ["PHOTO_FIND"]
     return allowed_types[max(0, stone_index) % len(allowed_types)]
+
+
+# ── [v5] 코스 단위 골고루 배정 ─────────────────────────────────────
+# 앱(quest_journey_screen._missionStageFor)은 strategy[0]의 코드로 화면을 고른다 —
+# 미션 타입이 달라도 플레이어에겐 같은 퀘스트다. 균형은 이 단위로 센다.
+STRATEGY_TO_APP_QUEST: dict[str, str] = {
+    "S4": "fire", "S5": "fire",          # 도깨비불 길들이기(→ 엽전 줍기)
+    "S1": "gather", "S6": "gather",      # 빛 순서 기억하기
+    "S2": "hunt",                        # 요괴 사냥
+    "S3": "quiz",                        # 퀴즈
+    "S7": "cafe",                        # 가게 방문(식음)
+}
+
+
+def app_quest_of(mission_type: str | None, motivations: list[str], *, is_food: bool = False,
+                 is_finale: bool = False) -> str:
+    """이 미션 타입이 앱에서 어떤 퀘스트 화면이 되는지 — select_strategies와 같은 규칙."""
+    strategies = select_strategies(motivations, mission_type, is_food=is_food, is_finale=is_finale)
+    code = strategies[0].split("_")[0] if strategies else ""
+    return STRATEGY_TO_APP_QUEST.get(code, "gather")
+
+
+def _allowed_mission_types(motivations: list[str]) -> list[str]:
+    playable = set(_playable_strategies(motivations, is_food=False, is_finale=False))
+    allowed = [
+        mtype for mtype in _MISSION_ORDER
+        if any(s in playable for s in MISSION_TO_STRATEGIES.get(mtype, ()))
+    ]
+    return allowed or ["PHOTO_FIND"]           # select_mission_type과 같은 최후 안전망
+
+
+def pick_balanced_mission_type(
+    motivations: list[str],
+    *,
+    counts: Counter,
+    prev_quest: str | None,
+    stone_index: int,
+    next_quest: str | None = None,
+) -> str:
+    """허용 미션 중 (코스에서 덜 쓴 퀘스트, 앞뒤와 다른 퀘스트) 순으로 고른다.
+
+    허용 퀘스트가 하나뿐이면(M3만=fire, M7만=quiz) 연속은 피할 수 없다 — 이웃이 피한다.
+    같은 퀘스트 묶음 안(예: gather = RESTORE_AR·COLLECT·DIALOGUE_FIND·FIND)에서는
+    그 퀘스트를 코스에서 쓴 횟수로 돌려(첫 fire=PHOTO_FIND, 둘째=PATH_TRACE …) 지령 문구가
+    겹치지 않게 한다. stone_index는 횟수를 모를 때(단독 호출)의 폴백.
+    """
+    allowed = _allowed_mission_types(motivations)
+    by_quest: dict[str, list[str]] = {}
+    for mtype in allowed:
+        by_quest.setdefault(app_quest_of(mtype, motivations), []).append(mtype)
+    quest = min(
+        by_quest,
+        key=lambda q: (counts[q], q == prev_quest, q == next_quest, _MISSION_ORDER.index(by_quest[q][0])),
+    )
+    group = by_quest[quest]
+    turn = counts[quest] if counts else max(0, stone_index)
+    return group[turn % len(group)]
+
+
+def select_mission_types_for_course(
+    motivations_list: list[list[str]],
+    metas: list[dict],
+) -> list[str | None]:
+    """코스 전체의 미션 타입을 방문 순서대로 한 번에 정한다(가볍고 결정적).
+
+    generator가 동기 분류 뒤·콘텐츠 생성 전에 호출. 식음=None, 피날레=DIALOGUE_COLLECT.
+    식음 노드도 '가게 방문' 퀘스트로 직전 퀘스트에 반영된다(연속 판단용).
+    """
+    counts: Counter = Counter()
+    prev: str | None = None
+    out: list[str | None] = []
+    for motivations, meta in zip(motivations_list, metas):
+        if meta.get("is_food"):
+            out.append(None)
+            prev = "cafe"
+            continue
+        if meta.get("is_finale"):
+            out.append("DIALOGUE_COLLECT")
+            prev = "gather"
+            continue
+        mtype = pick_balanced_mission_type(
+            motivations, counts=counts, prev_quest=prev, stone_index=meta.get("stone_index") or 0,
+        )
+        quest = app_quest_of(mtype, motivations)
+        counts[quest] += 1
+        prev = quest
+        out.append(mtype)
+    return out
 
 
 def select_strategies(
