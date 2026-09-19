@@ -294,7 +294,7 @@ def test_food_node_has_d6_without_unknown_state_or_paths_field():
 
     listen = next(a for a in node["actions"] if a["a"] == "listen")
     assert [choice["id"] for choice in listen["choices"]] == ["A", "B"]
-    assert listen["choices"][0]["reward_mod"] == {"coupon": 500}
+    assert "reward_mod" not in listen["choices"][0], "쿠폰 보상은 없앴다(coupon-affinity/ljs/v1)"
     assert next(a for a in node["actions"] if a["a"] == "purchase")["choice_id"] == "A"
     assert next(a for a in node["actions"] if a["a"] == "capture")["choice_id"] == "B"
     assert node["success"] == ["place_verified", "one_of:purchase_verified|free_alternative_done"]

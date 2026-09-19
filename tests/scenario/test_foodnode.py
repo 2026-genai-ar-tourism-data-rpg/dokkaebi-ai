@@ -22,7 +22,7 @@ def _spot(node_id: str, name: str) -> dict:
 def _food(node_id: str, name: str, kind: str = "food") -> dict:
     """식음 삽입 노드 픽스처(정찬희 hook interleave_food 산출 형태)."""
     return {"node_id": node_id, "name": name, "kind": kind, "band": 2,
-            "map_x": 126.99, "map_y": 37.57, "coupon": {"to_kind": "food", "amount": 500}}
+            "map_x": 126.99, "map_y": 37.57}
 
 
 # route: 관광-관광-식음-관광(피날레) — 식음이 중간에 낀 전형적 케이스
@@ -75,7 +75,7 @@ def test_build_quest_food_has_no_fragment():
     assert q["kind"] == "food"
     assert q["mission"] is None
     assert q["is_finale"] is False
-    assert q["coupon"] == {"to_kind": "food", "amount": 500}
+    assert "coupon" not in q                  # 상권 쿠폰은 없앴다(coupon-affinity/ljs/v1)
     assert q["order"] == 2                    # 방문 순서(식음 포함)는 보존
 
 

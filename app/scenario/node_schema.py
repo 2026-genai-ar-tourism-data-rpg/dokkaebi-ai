@@ -49,6 +49,11 @@
 #            stone_index로 미션 타입을 돌려 지령 문구도 다양하게. 이전 방식(select_mission_type,
 #            인덱스 순환)은 하위호환·단일 노드용으로 남긴다.
 # 구현일: 2026-09-19 | 작성: kys (fire-capture/kys/v1)
+# ------------------------------------------------------------
+# [v6] 쿠폰 보상 제거 — 실제 가게에서 쓸 수 없는 게임 속 할인이라 앱에서 걷어냈다.
+# 구현(요약): 보상 선택지(B)·식음 주문 선택지의 reward_mod 쿠폰, 퀴즈 정답 correct.coupon을
+#            더 만들지 않는다(correct는 빈 객체 — 경험치는 서버가 지급). _coupon_amount 제거.
+# 구현일: 2026-09-19 | 작성: ljs (coupon-affinity/ljs/v1)
 # ============================================================
 from __future__ import annotations
 
@@ -629,16 +634,12 @@ def build_choices(quest: dict[str, Any], *, is_food: bool) -> list[dict[str, Any
     범용 폴백 문구를 넣는다 — 효과(flags/affinity/reward_mod)는 코드 고정(규칙 2조).
     """
     if is_food:
-        paid: dict[str, Any] = {
-            "id": "A",
-            "text": "주문하고 영수증으로 인증한다.",
-            "flags": ["식음주문"],
-        }
-        coupon_amount = _coupon_amount(quest.get("coupon"))
-        if coupon_amount > 0:
-            paid["reward_mod"] = {"coupon": coupon_amount}
         return [
-            paid,
+            {
+                "id": "A",
+                "text": "주문하고 영수증으로 인증한다.",
+                "flags": ["식음주문"],
+            },
             {
                 "id": "B",
                 "text": "구매 없이 무료 대체 미션을 수행한다.",
@@ -657,7 +658,6 @@ def build_choices(quest: dict[str, Any], *, is_food: bool) -> list[dict[str, Any
             "id": "B",
             "text": "해야 할 일과 보상을 먼저 확인한다.",
             "flags": ["실리"],
-            "reward_mod": {"coupon": get_settings().scenario_choice_coupon},
         },
         {"id": "C", "text": "주변을 먼저 살펴본다."},
     ]
@@ -1096,7 +1096,7 @@ def _action_quiz(quest: dict[str, Any]) -> dict[str, Any]:
         "text": str(quiz.get("q") or f"{quest.get('name') or '이곳'}의 단서를 올바르게 확인한 방법은 무엇일까?"),
         "choices": options,
         "answer_idx": answer_idx,
-        "correct": {"coupon": get_settings().scenario_quiz_coupon},
+        "correct": {},  # 경험치는 서버가 자체 기준으로 지급 — 쿠폰 보상은 없앴다
         "hints": "ladder",
         "wrong_hint": str(quiz.get("wrong_hint") or GENERIC_ACTION_WRONG_HINT),
     }
@@ -1169,16 +1169,6 @@ def _source_text(source: dict[str, Any]) -> str:
         source.get("addr1"),
     ]
     return " ".join(str(part) for part in parts if part).lower()
-
-
-def _coupon_amount(value: Any) -> int:
-    if isinstance(value, dict):
-        for key in ("amount", "value", "discount", "discount_amount"):
-            if value.get(key) is not None:
-                return max(0, _safe_int(value.get(key), default=0))
-    if isinstance(value, (int, float, str)):
-        return max(0, _safe_int(value, default=0))
-    return 0
 
 
 def _quiz_answer_text(quiz: dict[str, Any]) -> str:

@@ -3,7 +3,6 @@
 import asyncio
 from unittest.mock import AsyncMock, patch
 
-from app.config import get_settings
 from app.scenario.ending import attach_endings
 from app.scenario.generator import generate_basic_scenario
 from app.scenario.node_schema import _action_quiz, _free_path_quiz, build_choices, validate_app_contract
@@ -31,11 +30,17 @@ def test_generated_finale_has_local_endings_and_choice_action():
 
 def test_server_owned_experience_is_not_emitted_by_generated_actions():
     quiz = _action_quiz({"name": "장소", "quiz": {"options": ["맞음", "틀림"], "answer": 0}})
-    assert quiz["correct"] == {"coupon": get_settings().scenario_quiz_coupon}
+    assert quiz["correct"] == {}, "경험치는 서버가, 쿠폰 보상은 없앴다"
     assert "exp" not in _free_path_quiz("카페")["correct"]
-    assert build_choices({}, is_food=False)[1]["reward_mod"] == {
-        "coupon": get_settings().scenario_choice_coupon
-    }
+
+
+def test_choices_carry_no_coupon_reward():
+    # 쿠폰 보상 제거(coupon-affinity/ljs/v1) — 사연을 묻는 A만 친밀도, B·식음 주문엔 보상 없음.
+    spot = build_choices({}, is_food=False)
+    assert spot[0]["affinity"] == 1
+    assert all("reward_mod" not in c for c in spot)
+    food = build_choices({"coupon": {"amount": 500}}, is_food=True)
+    assert all("reward_mod" not in c for c in food), "예전 코스의 쿠폰 값이 들어와도 보상으로 안 쓴다"
 
 
 def test_generated_scenario_exposes_endings_on_its_finale():
