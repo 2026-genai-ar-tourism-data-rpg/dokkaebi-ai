@@ -39,6 +39,8 @@ _GENERIC_TAGS = {
     # 건축 일반명사·풍경 — 그 장소만의 것이 아니다 (실측: 운현궁 → "기와집"이 타깃으로 나왔다)
     "기와집", "기와지붕", "지붕", "담장", "나무", "하늘", "구름", "풍경", "전경", "산책",
     "데이트", "포토존", "인생샷", "사진", "야외",
+    # 실측(덕수궁 돌담길): "추경"(가을 풍경)·"산책로"가 타깃으로 나왔다 — 계절 풍경·길 일반어
+    "춘경", "하경", "추경", "동경", "산책로", "산책길", "둘레길", "포토스팟", "명소길",
 }
 _GENERIC_PATTERNS = (
     re.compile(r"^(사적|보물|국보)\s*제?\s*\d+호$"),
@@ -271,11 +273,44 @@ async def attach_photo_refs(mission: dict, node: dict) -> dict:
     mission["photo_refs"] = refs["targets"]
     mission["ar_reference_images"] = refs["ar_reference_images"]
     if refs["targets"]:
-        llm_targets = list(mission.get("photo_targets") or [])
-        mission["llm_photo_targets"] = llm_targets
-        mission["photo_targets"] = [t["name"] for t in refs["targets"]]
-        logger.info(
-            "photo_targets 대체: %s → %s (node=%s)",
-            llm_targets, mission["photo_targets"], node.get("node_id"),
-        )
+        llm_targets = [str(t) for t in (mission.get("photo_targets") or []) if str(t).strip()]
+        merged = merge_targets(llm_targets, [t["name"] for t in refs["targets"]])
+        if merged != llm_targets:
+            mission["llm_photo_targets"] = llm_targets
+            mission["photo_targets"] = merged
+            logger.info(
+                "photo_targets 병합: LLM %s + 카탈로그 %s → %s (node=%s)",
+                llm_targets, [t["name"] for t in refs["targets"]], merged, node.get("node_id"),
+            )
     return mission
+
+
+# OCR 검증은 글자가 있어야 확실하다. LLM이 이런 낱말을 넣어 타깃을 냈다면 그게 더 좋은 타깃이다.
+_TEXT_BEARING = re.compile(r"(현판|안내판|안내문|표지판|표지석|비석|비문|기념비|간판|명패|현액|편액|주련|석비|동판|팻말|설명판)")
+
+
+def merge_targets(llm_targets: list[str], catalog: list[str], max_targets: int = 3) -> list[str]:
+    """LLM 타깃과 카탈로그(갤러리 태그) 타깃을 합친다.
+
+    실측(경교장): LLM은 "임시정부 전시공간 안내판", "백범 서거 현장 현판"처럼 OCR에 딱 맞는
+    타깃을 냈는데 카탈로그 "개인 사저"로 덮어써 더 나빠졌다. 규칙:
+      · 글자 있는 LLM 타깃(현판·안내판·비석…)은 맨 앞에 지킨다 — 검증 성공률이 가장 높은 것
+      · 그 뒤에 카탈로그 이름(실존 명소, 참조 사진 있음)
+      · 글자 없는 LLM 타깃은 카탈로그 뒤로 — 지어낸 것일 수 있어서
+      · 중복 제거, 상한 max_targets
+    """
+    def norm(x: str) -> str:
+        return re.sub(r"\s+", "", x).lower()
+    text_first = [t for t in llm_targets if _TEXT_BEARING.search(t)]
+    text_rest = [t for t in llm_targets if not _TEXT_BEARING.search(t)]
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in [*text_first, *catalog, *text_rest]:
+        k = norm(t)
+        if not k or k in seen or any(k in s or s in k for s in seen):   # "흥화문" vs "흥화문 현판" 같은 포함 관계도 중복
+            continue
+        seen.add(k)
+        out.append(t.strip())
+        if len(out) >= max_targets:
+            break
+    return out

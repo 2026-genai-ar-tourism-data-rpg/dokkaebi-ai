@@ -144,19 +144,48 @@ class TestBuildPhotoRefs:
         assert refs["source"] == "none" and not called
 
 
+class TestMergeTargets:
+    def test_text_bearing_llm_targets_stay_first(self):
+        # 실측(경교장) 재현: LLM의 안내판·현판 타깃을 카탈로그 "개인 사저"가 덮어썼다
+        out = pr.merge_targets(["대한민국 임시정부 전시공간 안내판", "백범 김구 선생 서거 역사적 현장 현판"], ["개인 사저"])
+        assert out[:2] == ["대한민국 임시정부 전시공간 안내판", "백범 김구 선생 서거 역사적 현장 현판"]
+        assert out[2] == "개인 사저"
+
+    def test_generic_llm_targets_go_after_catalog(self):
+        out = pr.merge_targets(["대문", "전통 건물 외관"], ["흥화문", "숭정전"])
+        assert out == ["흥화문", "숭정전", "대문"]                  # 상한 3, 지어낸 일반어는 뒤로
+
+    def test_dedupe_including_containment(self):
+        out = pr.merge_targets(["흥화문 현판"], ["흥화문", "숭정전"])
+        assert out == ["흥화문 현판", "숭정전"]                     # "흥화문"은 "흥화문 현판"에 포함 → 중복
+
+    def test_seasonal_and_path_tags_blocked(self):
+        photos = [{"url": "u", "title": "덕수궁 돌담길", "tags": ["정동길", "산책로", "추경", "둘레길"], "photographer": "a"}]
+        names = [t["name"] for t in pr.select_targets(photos, "덕수궁 돌담길", "", max_targets=5)]
+        assert names == ["정동길"]
+
+
 @pytest.mark.asyncio
 class TestAttach:
-    async def test_replaces_llm_targets_and_keeps_them(self, monkeypatch):
+    async def test_merges_llm_and_catalog_and_keeps_llm_copy(self, monkeypatch):
         async def fake(name, cid, overview):
             return {"targets": [{"name": "흥화문", "why": None, "ref_image": "u", "credit": "c", "photo_count": 1}],
                     "ar_reference_images": ["a", "b"], "source": "detail"}
         monkeypatch.setattr(pr, "build_photo_refs", fake)
         mission = {"type": "PHOTO_FIND", "photo_targets": ["대문", "전통 건물 외관"]}
         out = await pr.attach_photo_refs(mission, {"name": "경희궁", "tour_content_id": "1", "node_id": "tour_1"})
-        assert out["photo_targets"] == ["흥화문"]                 # 문자열 계약 유지, 값만 실존 명소로
+        assert out["photo_targets"] == ["흥화문", "대문", "전통 건물 외관"]   # 문자열 계약 유지, 실존 명소가 앞
         assert out["llm_photo_targets"] == ["대문", "전통 건물 외관"]
         assert out["photo_refs"][0]["ref_image"] == "u"
         assert out["ar_reference_images"] == ["a", "b"]
+
+    async def test_text_bearing_llm_target_not_overridden(self, monkeypatch):
+        async def fake(name, cid, overview):
+            return {"targets": [{"name": "개인 사저", "why": None, "ref_image": "u", "credit": "c", "photo_count": 1}],
+                    "ar_reference_images": [], "source": "gallery"}
+        monkeypatch.setattr(pr, "build_photo_refs", fake)
+        out = await pr.attach_photo_refs({"type": "PHOTO_FIND", "photo_targets": ["백범 서거 현장 현판"]}, {"name": "서울 경교장"})
+        assert out["photo_targets"][0] == "백범 서거 현장 현판"
 
     async def test_keeps_llm_targets_when_catalog_empty(self, monkeypatch):
         async def fake(name, cid, overview):
