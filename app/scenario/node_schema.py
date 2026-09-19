@@ -100,9 +100,10 @@ MISSION_TO_STRATEGIES: dict[str, tuple[str, ...]] = {
 
 # ① 미션 타입 결정 순서 — node_content.MISSION_CYCLE과 동일한 다양화 순서.
 #    (node_content를 import하면 LLM 클라이언트가 import 시점에 뜨므로 상수만 미러링)
+#    [fire-capture] PHOTO_FIND·PATH_TRACE(둘 다 앱에선 도깨비불)는 양 끝 — 연속·과다 방지.
 _MISSION_ORDER: tuple[str, ...] = (
-    "HUNT", "RESTORE_AR", "PHOTO_FIND", "PATH_TRACE",
-    "COLLECT", "DIALOGUE_FIND", "FIND", "QUIZ_FIND",
+    "HUNT", "RESTORE_AR", "PHOTO_FIND", "DIALOGUE_FIND",
+    "COLLECT", "QUIZ_FIND", "FIND", "PATH_TRACE",
 )
 
 # 단서설계규칙.md 예시 열 — 하위호환 choose_clue_name의 풀(v5부터 링크 경로는 quiz_clue_name).

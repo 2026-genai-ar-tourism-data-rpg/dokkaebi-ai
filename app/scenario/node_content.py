@@ -82,10 +82,12 @@ logger = get_logger(__name__)
 _llm = get_llm()
 
 # 노드 순서대로 순환 배정 → 매 노드 다른 미션 (피날레는 DIALOGUE_COLLECT)
-# 앞쪽에 AR 액션형(사냥/복원/추적)을 둬서 짧은(5노드) 코스에서도 다양하게 노출
+# 앞쪽에 AR 액션형(사냥/복원/추적)을 둬서 짧은(5노드) 코스에서도 다양하게 노출.
+# [fire-capture] PHOTO_FIND·PATH_TRACE는 앱에서 같은 '도깨비불 길들이기'라 순환표 양 끝으로
+# 떨어뜨렸다 — 붙어 있으면 4노드 코스의 절반이 연속 불꽃(실측 50%)이었다. 이제 4노드 1회·8노드 2회.
 MISSION_CYCLE = [
-    "HUNT", "RESTORE_AR", "PHOTO_FIND", "PATH_TRACE",
-    "COLLECT", "DIALOGUE_FIND", "FIND", "QUIZ_FIND",
+    "HUNT", "RESTORE_AR", "PHOTO_FIND", "DIALOGUE_FIND",
+    "COLLECT", "QUIZ_FIND", "FIND", "PATH_TRACE",
 ]
 
 
